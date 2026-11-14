@@ -44,15 +44,22 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
 
   private fun normalizeInstitutionSettings(raw: InstitutionSettings): InstitutionSettings {
     val isLegacyAccount =
-      raw.opayAccountNumber == "8030001122" ||
-        raw.opayAccountName.equals("JY-Computers Training Academy", ignoreCase = true)
+      raw.opayAccountNumber.isBlank() ||
+        raw.opayAccountNumber == "8030001122" ||
+        raw.opayAccountNumber == "0000000000" ||
+        raw.opayAccountNumber == "1234567890" ||
+        raw.opayAccountName.isBlank() ||
+        raw.opayAccountName.contains("Training Academy", ignoreCase = true)
     return if (isLegacyAccount) {
       raw.copy(
         opayBankName = JyCatalogDefaults.OFFICIAL_OPAY_BANK,
         opayAccountName = JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NAME,
         opayAccountNumber = JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NUMBER,
-        opayInstructions = JyCatalogDefaults.OFFICIAL_OPAY_INSTRUCTIONS,
+        opayInstructions =
+          raw.opayInstructions.ifBlank { JyCatalogDefaults.OFFICIAL_OPAY_INSTRUCTIONS },
       )
+    } else if (raw.opayBankName.isBlank()) {
+      raw.copy(opayBankName = JyCatalogDefaults.OFFICIAL_OPAY_BANK)
     } else {
       raw
     }
@@ -776,7 +783,16 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     return try {
       val settingsRef = db.collection("settings").document("institution")
       val settingsSnap = settingsRef.get().await()
-      if (!settingsSnap.exists() || settingsSnap.getString("opayAccountNumber") == "8030001122") {
+      val currentAccNum = settingsSnap.getString("opayAccountNumber").orEmpty()
+      val currentBank = settingsSnap.getString("opayBankName").orEmpty()
+      val currentAccName = settingsSnap.getString("opayAccountName").orEmpty()
+      if (
+        !settingsSnap.exists() ||
+          currentAccNum.isBlank() ||
+          currentAccNum == "8030001122" ||
+          currentBank.isBlank() ||
+          currentAccName.contains("Training Academy", ignoreCase = true)
+      ) {
         saveInstitutionSettings(InstitutionSettings())
       }
       val programmesSnap = db.collection("programmes").limit(1).get().await()

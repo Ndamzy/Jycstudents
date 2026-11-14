@@ -97,7 +97,12 @@ fun OfficialOpayBankCard(
       settings.opayAccountName
     }
   val accountNumber =
-    if (settings.opayAccountNumber.isBlank() || settings.opayAccountNumber == "8030001122") {
+    if (
+      settings.opayAccountNumber.isBlank() ||
+        settings.opayAccountNumber == "8030001122" ||
+        settings.opayAccountNumber == "0000000000" ||
+        settings.opayAccountNumber == "1234567890"
+    ) {
       JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NUMBER
     } else {
       settings.opayAccountNumber
