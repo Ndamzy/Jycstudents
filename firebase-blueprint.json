@@ -60,6 +60,7 @@
         "duration": { "type": "string" },
         "feeNaira": { "type": "integer" },
         "category": { "type": "string" },
+        "level": { "type": "string", "enum": ["Beginner", "Intermediate", "Advanced", "All Levels"] },
         "instructorUid": { "type": "string" },
         "instructorName": { "type": "string" },
         "scheduleText": { "type": "string" },
@@ -84,12 +85,17 @@
         "email": { "type": "string" },
         "residentialAddress": { "type": "string" },
         "stateOfOrigin": { "type": "string" },
+        "localGovernmentArea": { "type": "string" },
         "nextOfKin": { "type": "string" },
         "nextOfKinPhone": { "type": "string" },
         "passportPhotoBase64": { "type": "string" },
         "selectedProgrammeId": { "type": "string" },
         "selectedProgrammeTitle": { "type": "string" },
+        "trainingLevel": { "type": "string", "enum": ["Beginner", "Intermediate", "Advanced"] },
         "registrationDate": { "type": "string" },
+        "approvalStatus": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "paymentStatus": { "type": "string", "enum": ["unpaid", "pending", "paid"] },
+        "courseProgressPercent": { "type": "integer" },
         "status": { "type": "string", "enum": ["active", "suspended", "graduated"] },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -144,8 +150,9 @@
         "programmeId": { "type": "string" },
         "programmeTitle": { "type": "string" },
         "amountNaira": { "type": "integer" },
-        "method": { "type": "string", "enum": ["online_gateway", "opay_transfer"] },
+        "method": { "type": "string", "enum": ["online_gateway", "opay_transfer", "cash"] },
         "reference": { "type": "string" },
+        "paymentDate": { "type": "string" },
         "senderName": { "type": "string" },
         "evidenceBase64": { "type": "string" },
         "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
@@ -329,6 +336,20 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["blockedUid", "blockedName", "createdAt"]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Immutable administrative audit log for registrations, payments, courses, and roles.",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string" },
+        "actorName": { "type": "string" },
+        "action": { "type": "string" },
+        "targetId": { "type": "string" },
+        "details": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["actorUid", "actorName", "action", "details", "createdAt"]
     }
   },
   "firestore": {
@@ -403,6 +424,10 @@
     "/users/{uid}/blocked_users/{blockedUid}": {
       "schema": { "$ref": "#/entities/BlockedUser" },
       "description": "Per-user blocked users list."
+    },
+    "/activity_logs/{logId}": {
+      "schema": { "$ref": "#/entities/ActivityLog" },
+      "description": "Administrative audit trail."
     }
   }
 }

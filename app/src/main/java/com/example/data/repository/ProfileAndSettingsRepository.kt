@@ -2,6 +2,7 @@ package com.example.data.repository
 
 import android.content.Context
 import com.example.R
+import com.example.data.model.ActivityLog
 import com.example.data.model.BlockedUser
 import com.example.data.model.DirectoryEntry
 import com.example.data.model.InstitutionSettings
@@ -41,16 +42,34 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     auth.currentUser?.uid
       ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
 
+  private fun normalizeInstitutionSettings(raw: InstitutionSettings): InstitutionSettings {
+    val isLegacyAccount =
+      raw.opayAccountNumber == "8030001122" ||
+        raw.opayAccountName.equals("JY-Computers Training Academy", ignoreCase = true)
+    return if (isLegacyAccount) {
+      raw.copy(
+        opayBankName = JyCatalogDefaults.OFFICIAL_OPAY_BANK,
+        opayAccountName = JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NAME,
+        opayAccountNumber = JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NUMBER,
+        opayInstructions = JyCatalogDefaults.OFFICIAL_OPAY_INSTRUCTIONS,
+      )
+    } else {
+      raw
+    }
+  }
+
   fun observeInstitutionSettings(): Flow<InstitutionSettings> =
     db.collection("settings")
       .document("institution")
       .snapshots()
       .map { snapshot ->
         if (snapshot.exists()) {
-          snapshot.toObject(
-            InstitutionSettings::class.java,
-            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE,
-          ) ?: InstitutionSettings()
+          val parsed =
+            snapshot.toObject(
+              InstitutionSettings::class.java,
+              DocumentSnapshot.ServerTimestampBehavior.ESTIMATE,
+            ) ?: InstitutionSettings()
+          normalizeInstitutionSettings(parsed)
         } else {
           InstitutionSettings()
         }
@@ -100,19 +119,55 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     }
   }
 
+  suspend fun isStudentIdTaken(studentIdNumber: String): Boolean {
+    return try {
+      val snap =
+        db.collection("directory")
+          .whereEqualTo("studentIdNumber", studentIdNumber)
+          .limit(1)
+          .get()
+          .await()
+      !snap.isEmpty
+    } catch (_: Exception) {
+      false
+    }
+  }
+
   fun observeAllUsersAdmin(): Flow<List<UserProfile>> = flow {
     requireUserId()
     emitAll(
       db.collection("users")
         .snapshots()
         .map { snapshot ->
-          snapshot.toObjects(
-            UserProfile::class.java,
-            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE,
-          )
+          snapshot
+            .toObjects(
+              UserProfile::class.java,
+              DocumentSnapshot.ServerTimestampBehavior.ESTIMATE,
+            )
+            .sortedByDescending { it.createdAt?.seconds ?: 0L }
         }
         .catch { error ->
           logFlowError(error, OperationType.LIST, "users")
+          throw error
+        }
+    )
+  }
+
+  fun observeActivityLogsAdmin(): Flow<List<ActivityLog>> = flow {
+    requireUserId()
+    emitAll(
+      db.collection("activity_logs")
+        .snapshots()
+        .map { snapshot ->
+          snapshot
+            .toObjects(
+              ActivityLog::class.java,
+              DocumentSnapshot.ServerTimestampBehavior.ESTIMATE,
+            )
+            .sortedByDescending { it.createdAt?.seconds ?: 0L }
+        }
+        .catch { error ->
+          logFlowError(error, OperationType.LIST, "activity_logs")
           throw error
         }
     )
@@ -186,6 +241,16 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     val dirRef = db.collection("directory").document(uid)
     return try {
       val batch = db.batch()
+      val level =
+        if (profile.trainingLevel in JyCatalogDefaults.TRAINING_LEVELS) profile.trainingLevel
+        else "Beginner"
+      val approval =
+        if (profile.approvalStatus in listOf("pending", "approved", "rejected")) profile.approvalStatus
+        else "pending"
+      val paymentSt =
+        if (profile.paymentStatus in listOf("unpaid", "pending", "paid")) profile.paymentStatus
+        else "unpaid"
+
       val userPayload =
         mapOf(
           "userId" to uid,
@@ -198,12 +263,17 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
           "email" to profile.email.trim(),
           "residentialAddress" to profile.residentialAddress.trim(),
           "stateOfOrigin" to profile.stateOfOrigin.trim(),
+          "localGovernmentArea" to profile.localGovernmentArea.trim(),
           "nextOfKin" to profile.nextOfKin.trim(),
           "nextOfKinPhone" to profile.nextOfKinPhone.trim(),
           "passportPhotoBase64" to profile.passportPhotoBase64,
           "selectedProgrammeId" to profile.selectedProgrammeId,
           "selectedProgrammeTitle" to profile.selectedProgrammeTitle,
+          "trainingLevel" to level,
           "registrationDate" to profile.registrationDate,
+          "approvalStatus" to approval,
+          "paymentStatus" to paymentSt,
+          "courseProgressPercent" to profile.courseProgressPercent.coerceIn(0, 100),
           "status" to profile.status,
           "createdAt" to FieldValue.serverTimestamp(),
           "updatedAt" to FieldValue.serverTimestamp(),
@@ -237,6 +307,9 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     val userRef = db.collection("users").document(uid)
     val dirRef = db.collection("directory").document(uid)
     return try {
+      val level =
+        if (profile.trainingLevel in JyCatalogDefaults.TRAINING_LEVELS) profile.trainingLevel
+        else "Beginner"
       val batch = db.batch()
       val userUpdates =
         mapOf(
@@ -247,11 +320,13 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
           "email" to profile.email.trim(),
           "residentialAddress" to profile.residentialAddress.trim(),
           "stateOfOrigin" to profile.stateOfOrigin.trim(),
+          "localGovernmentArea" to profile.localGovernmentArea.trim(),
           "nextOfKin" to profile.nextOfKin.trim(),
           "nextOfKinPhone" to profile.nextOfKinPhone.trim(),
           "passportPhotoBase64" to profile.passportPhotoBase64,
           "selectedProgrammeId" to profile.selectedProgrammeId,
           "selectedProgrammeTitle" to profile.selectedProgrammeTitle,
+          "trainingLevel" to level,
           "updatedAt" to FieldValue.serverTimestamp(),
         )
       val dirUpdates =
@@ -274,18 +349,122 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     }
   }
 
-  suspend fun adminUpdateStudentStatus(targetUid: String, newStatus: String): Result<Unit> {
-    requireUserId()
-    val docRef = db.collection("users").document(targetUid)
+  suspend fun adminEditStudentProfile(
+    profile: UserProfile,
+    actorName: String,
+  ): Result<Unit> {
+    val actorUid = requireUserId()
+    val uid = profile.userId
+    val userRef = db.collection("users").document(uid)
+    val dirRef = db.collection("directory").document(uid)
     return try {
-      docRef
-        .update(
+      val level =
+        if (profile.trainingLevel in JyCatalogDefaults.TRAINING_LEVELS) profile.trainingLevel
+        else "Beginner"
+      val batch = db.batch()
+      batch.update(
+        userRef,
+        mapOf(
+          "fullName" to profile.fullName.trim(),
+          "gender" to profile.gender,
+          "dateOfBirth" to profile.dateOfBirth.trim(),
+          "phoneNumber" to profile.phoneNumber.trim(),
+          "email" to profile.email.trim(),
+          "residentialAddress" to profile.residentialAddress.trim(),
+          "stateOfOrigin" to profile.stateOfOrigin.trim(),
+          "localGovernmentArea" to profile.localGovernmentArea.trim(),
+          "nextOfKin" to profile.nextOfKin.trim(),
+          "nextOfKinPhone" to profile.nextOfKinPhone.trim(),
+          "passportPhotoBase64" to profile.passportPhotoBase64,
+          "selectedProgrammeId" to profile.selectedProgrammeId,
+          "selectedProgrammeTitle" to profile.selectedProgrammeTitle,
+          "trainingLevel" to level,
+          "approvalStatus" to profile.approvalStatus,
+          "paymentStatus" to profile.paymentStatus,
+          "courseProgressPercent" to profile.courseProgressPercent.coerceIn(0, 100),
+          "status" to profile.status,
+          "updatedAt" to FieldValue.serverTimestamp(),
+        ),
+      )
+      if (dirRef.get().await().exists()) {
+        batch.update(
+          dirRef,
           mapOf(
-            "status" to newStatus,
+            "fullName" to profile.fullName.trim(),
+            "selectedProgrammeTitle" to profile.selectedProgrammeTitle,
             "updatedAt" to FieldValue.serverTimestamp(),
-          )
+          ),
         )
-        .await()
+      }
+      val logRef = db.collection("activity_logs").document()
+      batch.set(
+        logRef,
+        mapOf(
+          "actorUid" to actorUid,
+          "actorName" to actorName.ifBlank { "Administrator" },
+          "action" to "UPDATE_STUDENT",
+          "targetId" to uid,
+          "details" to "Updated profile for ${profile.fullName} (${profile.studentIdNumber})",
+          "createdAt" to FieldValue.serverTimestamp(),
+        ),
+      )
+      batch.commit().await()
+      Result.success(Unit)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, userRef.path)
+      Result.failure(e)
+    }
+  }
+
+  suspend fun adminUpdateApprovalStatus(
+    targetUid: String,
+    studentName: String,
+    approvalStatus: String,
+    actorName: String,
+  ): Result<Unit> {
+    val actorUid = requireUserId()
+    val docRef = db.collection("users").document(targetUid)
+    val notifRef = db.collection("notifications").document()
+    val logRef = db.collection("activity_logs").document()
+    return try {
+      val batch = db.batch()
+      batch.update(
+        docRef,
+        mapOf(
+          "approvalStatus" to approvalStatus,
+          "updatedAt" to FieldValue.serverTimestamp(),
+        ),
+      )
+      batch.set(
+        notifRef,
+        mapOf(
+          "userId" to targetUid,
+          "title" to if (approvalStatus == "approved") "Registration Approved" else "Registration Update",
+          "message" to
+            if (approvalStatus == "approved") {
+              "Your JY-Computers student registration has been approved by Administration."
+            } else {
+              "Your registration status was updated to ${approvalStatus.uppercase()}."
+            },
+          "type" to "registration",
+          "isRead" to false,
+          "createdAt" to FieldValue.serverTimestamp(),
+        ),
+      )
+      batch.set(
+        logRef,
+        mapOf(
+          "actorUid" to actorUid,
+          "actorName" to actorName.ifBlank { "Administrator" },
+          "action" to "APPROVAL_${approvalStatus.uppercase()}",
+          "targetId" to targetUid,
+          "details" to "Set registration approval for $studentName to ${approvalStatus.uppercase()}",
+          "createdAt" to FieldValue.serverTimestamp(),
+        ),
+      )
+      batch.commit().await()
       Result.success(Unit)
     } catch (e: CancellationException) {
       throw e
@@ -295,14 +474,112 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     }
   }
 
-  suspend fun adminDeleteStudent(targetUid: String): Result<Unit> {
-    requireUserId()
+  suspend fun adminUpdateStudentProgress(
+    targetUid: String,
+    studentName: String,
+    progressPercent: Int,
+    statusOverride: String?,
+    actorName: String,
+  ): Result<Unit> {
+    val actorUid = requireUserId()
+    val docRef = db.collection("users").document(targetUid)
+    val logRef = db.collection("activity_logs").document()
+    return try {
+      val clamped = progressPercent.coerceIn(0, 100)
+      val batch = db.batch()
+      val updates =
+        mutableMapOf<String, Any>(
+          "courseProgressPercent" to clamped,
+          "updatedAt" to FieldValue.serverTimestamp(),
+        )
+      if (!statusOverride.isNullOrBlank()) {
+        updates["status"] = statusOverride
+      }
+      batch.update(docRef, updates)
+      batch.set(
+        logRef,
+        mapOf(
+          "actorUid" to actorUid,
+          "actorName" to actorName.ifBlank { "Administrator" },
+          "action" to "UPDATE_PROGRESS",
+          "targetId" to targetUid,
+          "details" to "Updated course progress for $studentName to $clamped%${statusOverride?.let { " ($it)" } ?: ""}",
+          "createdAt" to FieldValue.serverTimestamp(),
+        ),
+      )
+      batch.commit().await()
+      Result.success(Unit)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+      Result.failure(e)
+    }
+  }
+
+  suspend fun adminUpdateStudentStatus(
+    targetUid: String,
+    newStatus: String,
+    studentName: String = "",
+    actorName: String = "Administrator",
+  ): Result<Unit> {
+    val actorUid = requireUserId()
+    val docRef = db.collection("users").document(targetUid)
+    return try {
+      val batch = db.batch()
+      batch.update(
+        docRef,
+        mapOf(
+          "status" to newStatus,
+          "updatedAt" to FieldValue.serverTimestamp(),
+        ),
+      )
+      val logRef = db.collection("activity_logs").document()
+      batch.set(
+        logRef,
+        mapOf(
+          "actorUid" to actorUid,
+          "actorName" to actorName.ifBlank { "Administrator" },
+          "action" to "STUDENT_STATUS_${newStatus.uppercase()}",
+          "targetId" to targetUid,
+          "details" to "Updated status for ${studentName.ifBlank { targetUid }} to $newStatus",
+          "createdAt" to FieldValue.serverTimestamp(),
+        ),
+      )
+      batch.commit().await()
+      Result.success(Unit)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+      Result.failure(e)
+    }
+  }
+
+  suspend fun adminDeleteStudent(
+    targetUid: String,
+    studentName: String = "",
+    actorName: String = "Administrator",
+  ): Result<Unit> {
+    val actorUid = requireUserId()
     val userRef = db.collection("users").document(targetUid)
     val dirRef = db.collection("directory").document(targetUid)
     return try {
       val batch = db.batch()
       batch.delete(userRef)
       batch.delete(dirRef)
+      val logRef = db.collection("activity_logs").document()
+      batch.set(
+        logRef,
+        mapOf(
+          "actorUid" to actorUid,
+          "actorName" to actorName.ifBlank { "Administrator" },
+          "action" to "DELETE_STUDENT",
+          "targetId" to targetUid,
+          "details" to "Deleted student record ${studentName.ifBlank { targetUid }}",
+          "createdAt" to FieldValue.serverTimestamp(),
+        ),
+      )
       batch.commit().await()
       Result.success(Unit)
     } catch (e: CancellationException) {
@@ -320,14 +597,17 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     role: String,
     specialization: String = "Computer Training",
     assignedCourseIds: List<String> = emptyList(),
+    actorName: String = "Administrator",
   ): Result<Unit> {
-    requireUserId()
+    val actorUid = requireUserId()
     val userRef = db.collection("users").document(targetUid)
     val dirRef = db.collection("directory").document(targetUid)
     return try {
       val batch = db.batch()
       batch.update(userRef, mapOf("role" to role, "updatedAt" to FieldValue.serverTimestamp()))
-      batch.update(dirRef, mapOf("role" to role, "updatedAt" to FieldValue.serverTimestamp()))
+      if (dirRef.get().await().exists()) {
+        batch.update(dirRef, mapOf("role" to role, "updatedAt" to FieldValue.serverTimestamp()))
+      }
       if (role == "instructor") {
         val instRef = db.collection("instructors").document(targetUid)
         batch.set(
@@ -355,6 +635,18 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
           ),
         )
       }
+      val logRef = db.collection("activity_logs").document()
+      batch.set(
+        logRef,
+        mapOf(
+          "actorUid" to actorUid,
+          "actorName" to actorName.ifBlank { "Administrator" },
+          "action" to "ASSIGN_ROLE_${role.uppercase()}",
+          "targetId" to targetUid,
+          "details" to "Assigned role ${role.uppercase()} to $fullName ($email)",
+          "createdAt" to FieldValue.serverTimestamp(),
+        ),
+      )
       batch.commit().await()
       Result.success(Unit)
     } catch (e: CancellationException) {
@@ -362,6 +654,32 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     } catch (e: Exception) {
       handleFirestoreError(e, OperationType.UPDATE, userRef.path)
       Result.failure(e)
+    }
+  }
+
+  suspend fun logAdminActivity(
+    actorName: String,
+    action: String,
+    targetId: String,
+    details: String,
+  ) {
+    val actorUid = auth.currentUser?.uid ?: return
+    try {
+      db.collection("activity_logs")
+        .document()
+        .set(
+          mapOf(
+            "actorUid" to actorUid,
+            "actorName" to actorName.ifBlank { "Administrator" },
+            "action" to action,
+            "targetId" to targetId,
+            "details" to details,
+            "createdAt" to FieldValue.serverTimestamp(),
+          )
+        )
+        .await()
+    } catch (_: Exception) {
+      // Best-effort audit logging
     }
   }
 
@@ -458,7 +776,7 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     return try {
       val settingsRef = db.collection("settings").document("institution")
       val settingsSnap = settingsRef.get().await()
-      if (!settingsSnap.exists()) {
+      if (!settingsSnap.exists() || settingsSnap.getString("opayAccountNumber") == "8030001122") {
         saveInstitutionSettings(InstitutionSettings())
       }
       val programmesSnap = db.collection("programmes").limit(1).get().await()
@@ -474,6 +792,7 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
               "duration" to seed.duration,
               "feeNaira" to seed.feeNaira,
               "category" to seed.category,
+              "level" to seed.level,
               "instructorUid" to "",
               "instructorName" to "JY-Computers Faculty",
               "scheduleText" to seed.scheduleText,

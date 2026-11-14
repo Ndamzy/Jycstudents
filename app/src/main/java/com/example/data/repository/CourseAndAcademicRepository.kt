@@ -67,6 +67,12 @@ class CourseAndAcademicRepository(private val db: FirebaseFirestore) {
       } else {
         db.collection("programmes").document(programme.id)
       }
+    val validLevel =
+      if (programme.level in listOf("Beginner", "Intermediate", "Advanced", "All Levels")) {
+        programme.level
+      } else {
+        "All Levels"
+      }
     return try {
       val existing = if (programme.id.isNotBlank()) docRef.get().await().exists() else false
       if (!existing) {
@@ -78,6 +84,7 @@ class CourseAndAcademicRepository(private val db: FirebaseFirestore) {
               "duration" to programme.duration.trim(),
               "feeNaira" to programme.feeNaira,
               "category" to programme.category.trim(),
+              "level" to validLevel,
               "instructorUid" to programme.instructorUid,
               "instructorName" to programme.instructorName.trim(),
               "scheduleText" to programme.scheduleText.trim(),
@@ -96,6 +103,7 @@ class CourseAndAcademicRepository(private val db: FirebaseFirestore) {
               "duration" to programme.duration.trim(),
               "feeNaira" to programme.feeNaira,
               "category" to programme.category.trim(),
+              "level" to validLevel,
               "instructorUid" to programme.instructorUid,
               "instructorName" to programme.instructorName.trim(),
               "scheduleText" to programme.scheduleText.trim(),
@@ -110,6 +118,27 @@ class CourseAndAcademicRepository(private val db: FirebaseFirestore) {
       throw e
     } catch (e: Exception) {
       handleFirestoreError(e, OperationType.WRITE, docRef.path)
+      Result.failure(e)
+    }
+  }
+
+  suspend fun toggleProgrammeActive(programmeId: String, active: Boolean): Result<Unit> {
+    requireUserId()
+    val docRef = db.collection("programmes").document(programmeId)
+    return try {
+      docRef
+        .update(
+          mapOf(
+            "active" to active,
+            "updatedAt" to FieldValue.serverTimestamp(),
+          )
+        )
+        .await()
+      Result.success(Unit)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
       Result.failure(e)
     }
   }
@@ -185,6 +214,27 @@ class CourseAndAcademicRepository(private val db: FirebaseFirestore) {
       throw e
     } catch (e: Exception) {
       handleFirestoreError(e, OperationType.CREATE, docRef.path)
+      Result.failure(e)
+    }
+  }
+
+  suspend fun updateEnrollmentStatus(enrollmentId: String, status: String): Result<Unit> {
+    requireUserId()
+    val docRef = db.collection("enrollments").document(enrollmentId)
+    return try {
+      docRef
+        .update(
+          mapOf(
+            "status" to status,
+            "updatedAt" to FieldValue.serverTimestamp(),
+          )
+        )
+        .await()
+      Result.success(Unit)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      handleFirestoreError(e, OperationType.UPDATE, docRef.path)
       Result.failure(e)
     }
   }

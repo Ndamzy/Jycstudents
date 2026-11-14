@@ -72,6 +72,7 @@ service cloud.firestore {
              data.duration is string && data.duration.size() >= 2 && data.duration.size() <= 40 &&
              data.feeNaira is int && data.feeNaira >= 0 && data.feeNaira <= 50000000 &&
              data.category is string && data.category.size() >= 2 && data.category.size() <= 60 &&
+             (!('level' in data) || data.level in ['Beginner', 'Intermediate', 'Advanced', 'All Levels']) &&
              (!('instructorUid' in data) || (data.instructorUid is string && data.instructorUid.size() <= 128)) &&
              (!('instructorName' in data) || (data.instructorName is string && data.instructorName.size() <= 120)) &&
              (!('scheduleText' in data) || (data.scheduleText is string && data.scheduleText.size() <= 120)) &&
@@ -91,12 +92,17 @@ service cloud.firestore {
              data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
              data.residentialAddress is string && data.residentialAddress.size() >= 2 && data.residentialAddress.size() <= 250 &&
              data.stateOfOrigin is string && data.stateOfOrigin.size() >= 2 && data.stateOfOrigin.size() <= 60 &&
+             (!('localGovernmentArea' in data) || (data.localGovernmentArea is string && data.localGovernmentArea.size() <= 80)) &&
              data.nextOfKin is string && data.nextOfKin.size() >= 2 && data.nextOfKin.size() <= 120 &&
              data.nextOfKinPhone is string && data.nextOfKinPhone.size() >= 4 && data.nextOfKinPhone.size() <= 30 &&
-             (!('passportPhotoBase64' in data) || (data.passportPhotoBase64 is string && data.passportPhotoBase64.size() <= 250000)) &&
+             (!('passportPhotoBase64' in data) || (data.passportPhotoBase64 is string && data.passportPhotoBase64.size() <= 350000)) &&
              data.selectedProgrammeId is string && data.selectedProgrammeId.size() >= 1 && data.selectedProgrammeId.size() <= 128 &&
              data.selectedProgrammeTitle is string && data.selectedProgrammeTitle.size() >= 2 && data.selectedProgrammeTitle.size() <= 120 &&
+             (!('trainingLevel' in data) || data.trainingLevel in ['Beginner', 'Intermediate', 'Advanced']) &&
              data.registrationDate is string && data.registrationDate.size() >= 2 && data.registrationDate.size() <= 40 &&
+             (!('approvalStatus' in data) || data.approvalStatus in ['pending', 'approved', 'rejected']) &&
+             (!('paymentStatus' in data) || data.paymentStatus in ['unpaid', 'pending', 'paid']) &&
+             (!('courseProgressPercent' in data) || (data.courseProgressPercent is int && data.courseProgressPercent >= 0 && data.courseProgressPercent <= 100)) &&
              data.status in ['active', 'suspended', 'graduated'] &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
@@ -136,10 +142,11 @@ service cloud.firestore {
              data.programmeId is string && data.programmeId.size() >= 1 && data.programmeId.size() <= 128 &&
              data.programmeTitle is string && data.programmeTitle.size() >= 2 && data.programmeTitle.size() <= 120 &&
              data.amountNaira is int && data.amountNaira > 0 && data.amountNaira <= 50000000 &&
-             data.method in ['online_gateway', 'opay_transfer'] &&
+             data.method in ['online_gateway', 'opay_transfer', 'cash'] &&
              data.reference is string && data.reference.size() >= 4 && data.reference.size() <= 100 &&
+             (!('paymentDate' in data) || (data.paymentDate is string && data.paymentDate.size() <= 40)) &&
              (!('senderName' in data) || (data.senderName is string && data.senderName.size() <= 120)) &&
-             (!('evidenceBase64' in data) || (data.evidenceBase64 is string && data.evidenceBase64.size() <= 300000)) &&
+             (!('evidenceBase64' in data) || (data.evidenceBase64 is string && data.evidenceBase64.size() <= 350000)) &&
              data.status in ['pending', 'approved', 'rejected'] &&
              (!('adminRemarks' in data) || (data.adminRemarks is string && data.adminRemarks.size() <= 300)) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
@@ -273,6 +280,15 @@ service cloud.firestore {
              data.createdAt is timestamp && data.createdAt <= request.time;
     }
 
+    function isValidActivityLog(data) {
+      return data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128 &&
+             data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120 &&
+             data.action is string && data.action.size() >= 2 && data.action.size() <= 80 &&
+             (!('targetId' in data) || (data.targetId is string && data.targetId.size() <= 128)) &&
+             data.details is string && data.details.size() >= 1 && data.details.size() <= 500 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
     // --- COLLECTION RULES ---
 
     match /settings/{settingId} {
@@ -313,13 +329,20 @@ service cloud.firestore {
       allow create: if isSignedIn() && isValidId(uid) && isValidUserProfile(incoming()) &&
                        incoming().keys().hasOnly([
                          'userId', 'role', 'studentIdNumber', 'fullName', 'gender', 'dateOfBirth',
-                         'phoneNumber', 'email', 'residentialAddress', 'stateOfOrigin',
+                         'phoneNumber', 'email', 'residentialAddress', 'stateOfOrigin', 'localGovernmentArea',
                          'nextOfKin', 'nextOfKinPhone', 'passportPhotoBase64',
-                         'selectedProgrammeId', 'selectedProgrammeTitle', 'registrationDate',
+                         'selectedProgrammeId', 'selectedProgrammeTitle', 'trainingLevel',
+                         'registrationDate', 'approvalStatus', 'paymentStatus', 'courseProgressPercent',
                          'status', 'createdAt', 'updatedAt'
                        ]) && (
         isAdmin() ||
-        (request.auth.uid == uid && incoming().userId == request.auth.uid && incoming().role == 'student' && incoming().status == 'active')
+        (request.auth.uid == uid &&
+         incoming().userId == request.auth.uid &&
+         incoming().role == 'student' &&
+         incoming().status == 'active' &&
+         (!('approvalStatus' in incoming()) || incoming().approvalStatus == 'pending') &&
+         (!('paymentStatus' in incoming()) || incoming().paymentStatus in ['unpaid', 'pending']) &&
+         (!('courseProgressPercent' in incoming()) || incoming().courseProgressPercent == 0))
       );
       allow update: if isSignedIn() && isValidId(uid) && isValidUserProfile(incoming()) &&
                        incoming().userId == existing().userId &&
@@ -329,10 +352,13 @@ service cloud.firestore {
          incoming().role == existing().role &&
          incoming().status == existing().status &&
          incoming().studentIdNumber == existing().studentIdNumber &&
+         (!('approvalStatus' in existing()) || incoming().approvalStatus == existing().approvalStatus) &&
+         (!('courseProgressPercent' in existing()) || incoming().courseProgressPercent == existing().courseProgressPercent) &&
          incoming().diff(existing()).affectedKeys().hasOnly([
            'fullName', 'gender', 'dateOfBirth', 'phoneNumber', 'email',
-           'residentialAddress', 'stateOfOrigin', 'nextOfKin', 'nextOfKinPhone',
-           'passportPhotoBase64', 'selectedProgrammeId', 'selectedProgrammeTitle', 'updatedAt'
+           'residentialAddress', 'stateOfOrigin', 'localGovernmentArea',
+           'nextOfKin', 'nextOfKinPhone', 'passportPhotoBase64',
+           'selectedProgrammeId', 'selectedProgrammeTitle', 'trainingLevel', 'updatedAt'
          ]))
       );
       allow delete: if isAdmin() && isValidId(uid);
@@ -395,7 +421,7 @@ service cloud.firestore {
       );
       allow create: if isSignedIn() && isValidId(paymentId) && isValidPayment(incoming()) && (
         isAdmin() ||
-        (incoming().userId == request.auth.uid && incoming().status == 'pending')
+        (incoming().userId == request.auth.uid && incoming().status == 'pending' && incoming().method in ['online_gateway', 'opay_transfer'])
       );
       allow update: if isSignedIn() && isValidId(paymentId) && isValidPayment(incoming()) &&
                        incoming().userId == existing().userId &&
@@ -572,6 +598,13 @@ service cloud.firestore {
       allow update: if isAdmin() && isValidId(reportId) && isValidChatReport(incoming()) &&
                        incoming().createdAt == existing().createdAt;
       allow delete: if isAdmin() && isValidId(reportId);
+    }
+
+    match /activity_logs/{logId} {
+      allow get: if isAdmin() && isValidId(logId);
+      allow list: if isAdmin();
+      allow create: if isAdmin() && isValidId(logId) && isValidActivityLog(incoming());
+      allow update, delete: if false;
     }
   }
 }

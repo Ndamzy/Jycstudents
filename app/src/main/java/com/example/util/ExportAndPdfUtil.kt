@@ -12,9 +12,11 @@ import android.graphics.pdf.PdfDocument
 import androidx.core.content.FileProvider
 import com.example.R
 import com.example.data.model.Certificate
+import com.example.data.model.Enrollment
 import com.example.data.model.InstitutionSettings
 import com.example.data.model.JyCatalogDefaults
 import com.example.data.model.Payment
+import com.example.data.model.UserProfile
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -44,18 +46,144 @@ object ExportAndPdfUtil {
     context.startActivity(chooser)
   }
 
+  fun generateStudentProfilePdf(
+    context: Context,
+    student: UserProfile,
+    enrollments: List<Enrollment>,
+    settings: InstitutionSettings,
+  ): File {
+    val doc = PdfDocument()
+    val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
+    val page = doc.startPage(pageInfo)
+    val canvas = page.canvas
+
+    canvas.drawColor(Color.WHITE)
+    val bannerPaint = Paint().apply { color = Color.parseColor("#0D47A1") }
+    canvas.drawRect(0f, 0f, 595f, 118f, bannerPaint)
+
+    try {
+      val logoBitmap = BitmapFactory.decodeResource(context.resources, R.drawable.img_institution_logo)
+      if (logoBitmap != null) {
+        val whiteCard = Paint().apply { color = Color.WHITE }
+        canvas.drawRoundRect(RectF(24f, 20f, 102f, 98f), 12f, 12f, whiteCard)
+        canvas.drawBitmap(logoBitmap, null, RectF(28f, 24f, 98f, 94f), null)
+      }
+    } catch (_: Exception) {
+      // Optional logo
+    }
+
+    val titlePaint =
+      Paint().apply {
+        color = Color.WHITE
+        textSize = 20f
+        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        isAntiAlias = true
+      }
+    val subPaint =
+      Paint().apply {
+        color = Color.parseColor("#DBEAFE")
+        textSize = 11.5f
+        isAntiAlias = true
+      }
+    canvas.drawText(settings.institutionName, 118f, 46f, titlePaint)
+    canvas.drawText("OFFICIAL STUDENT REGISTRATION INFORMATION SHEET", 118f, 70f, subPaint)
+    canvas.drawText("${settings.physicalAddress} • ${settings.contactPhone}", 118f, 90f, subPaint)
+
+    // Student passport photo on top-right of body
+    val passportBitmap = ImageCompressionUtil.decodeBase64ToBitmap(student.passportPhotoBase64)
+    if (passportBitmap != null) {
+      val framePaint =
+        Paint().apply {
+          color = Color.parseColor("#CBD5E1")
+          style = Paint.Style.STROKE
+          strokeWidth = 2f
+        }
+      val photoRect = RectF(445f, 140f, 555f, 250f)
+      canvas.drawBitmap(passportBitmap, null, photoRect, null)
+      canvas.drawRect(photoRect, framePaint)
+    }
+
+    val labelPaint =
+      Paint().apply {
+        color = Color.parseColor("#64748B")
+        textSize = 11.5f
+        isAntiAlias = true
+      }
+    val valuePaint =
+      Paint().apply {
+        color = Color.parseColor("#0F172A")
+        textSize = 13f
+        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        isAntiAlias = true
+      }
+    val dividerPaint =
+      Paint().apply {
+        color = Color.parseColor("#E2E8F0")
+        strokeWidth = 1f
+      }
+
+    val totalFees = enrollments.sumOf { it.totalFeeNaira }
+    val totalPaid = enrollments.sumOf { it.amountPaidNaira }
+    val balance = (totalFees - totalPaid).coerceAtLeast(0L)
+
+    val rows =
+      listOf(
+        "Registration Number" to student.studentIdNumber,
+        "Full Name" to student.fullName,
+        "Gender / Date of Birth" to "${student.gender} • ${student.dateOfBirth}",
+        "Phone Number" to student.phoneNumber,
+        "Email Address" to student.email,
+        "Residential Address" to student.residentialAddress.take(48),
+        "State / LGA" to "${student.stateOfOrigin}${if (student.localGovernmentArea.isNotBlank()) " / ${student.localGovernmentArea}" else ""}",
+        "Next of Kin" to "${student.nextOfKin} (${student.nextOfKinPhone})",
+        "Selected Course" to "${student.selectedProgrammeTitle} (${student.trainingLevel})",
+        "Registration Date" to student.registrationDate,
+        "Approval / Account Status" to "${student.approvalStatus.uppercase()} / ${student.status.uppercase()}",
+        "Course Progress" to "${student.courseProgressPercent}%",
+        "Tuition Summary" to "Paid ${JyCatalogDefaults.formatNaira(totalPaid)} • Balance ${JyCatalogDefaults.formatNaira(balance)}",
+        "Official OPay Account" to "${JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NAME} • ${JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NUMBER} (${JyCatalogDefaults.OFFICIAL_OPAY_BANK})",
+      )
+
+    var y = 158f
+    rows.forEachIndexed { idx, (label, value) ->
+      val maxWidthX = if (idx < 3 && passportBitmap != null) 425f else 559f
+      canvas.drawText(label, 32f, y, labelPaint)
+      canvas.drawText(value.ifBlank { "-" }, 205f, y, valuePaint)
+      canvas.drawLine(32f, y + 11f, maxWidthX, y + 11f, dividerPaint)
+      y += 38f
+    }
+
+    val footerPaint =
+      Paint().apply {
+        color = Color.parseColor("#475569")
+        textSize = 10.5f
+        isAntiAlias = true
+      }
+    canvas.drawText(
+      "Generated on ${SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date())} • ${settings.email}",
+      32f,
+      798f,
+      footerPaint,
+    )
+
+    doc.finishPage(page)
+    val safeId = student.studentIdNumber.ifBlank { student.fullName }.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+    val outFile = File(getExportsDir(context), "JYC_Student_${safeId}.pdf")
+    FileOutputStream(outFile).use { doc.writeTo(it) }
+    doc.close()
+    return outFile
+  }
+
   fun generateCertificatePdf(
     context: Context,
     certificate: Certificate,
     settings: InstitutionSettings,
   ): File {
     val doc = PdfDocument()
-    // Landscape A4-like dimensions (842 x 595 pt)
     val pageInfo = PdfDocument.PageInfo.Builder(842, 595, 1).create()
     val page = doc.startPage(pageInfo)
     val canvas: Canvas = page.canvas
 
-    // Background & double border
     canvas.drawColor(Color.WHITE)
     val outerBorder =
       Paint().apply {
@@ -72,7 +200,15 @@ object ExportAndPdfUtil {
     canvas.drawRect(24f, 24f, 818f, 571f, outerBorder)
     canvas.drawRect(36f, 36f, 806f, 559f, innerBorder)
 
-    // Top banner accent
+    try {
+      val logoBitmap = BitmapFactory.decodeResource(context.resources, R.drawable.img_institution_logo)
+      if (logoBitmap != null) {
+        canvas.drawBitmap(logoBitmap, null, RectF(64f, 52f, 144f, 132f), null)
+      }
+    } catch (_: Exception) {
+      // Optional logo
+    }
+
     val headerPaint =
       Paint().apply {
         color = Color.parseColor("#0D3B66")
@@ -92,7 +228,6 @@ object ExportAndPdfUtil {
       }
     canvas.drawText(settings.motto, 421f, 114f, mottoPaint)
 
-    // Certificate Seal bitmap
     try {
       val sealBitmap = BitmapFactory.decodeResource(context.resources, R.drawable.img_certificate_seal)
       if (sealBitmap != null) {
@@ -154,7 +289,6 @@ object ExportAndPdfUtil {
     canvas.drawText(certificate.programmeTitle, 421f, 358f, progPaint)
     canvas.drawText("Awarded on ${certificate.graduationDate}", 421f, 392f, bodyPaint)
 
-    // Signature line
     val linePaint =
       Paint().apply {
         color = Color.parseColor("#0D3B66")
@@ -172,7 +306,6 @@ object ExportAndPdfUtil {
     canvas.drawText(certificate.signatoryName, 200f, 502f, sigNamePaint)
     canvas.drawText(certificate.signatoryTitle, 200f, 520f, mottoPaint)
 
-    // Verification code
     val verifyPaint =
       Paint().apply {
         color = Color.parseColor("#334155")
@@ -204,10 +337,21 @@ object ExportAndPdfUtil {
     val bannerPaint = Paint().apply { color = Color.parseColor("#0D47A1") }
     canvas.drawRect(0f, 0f, 595f, 120f, bannerPaint)
 
+    try {
+      val logoBitmap = BitmapFactory.decodeResource(context.resources, R.drawable.img_institution_logo)
+      if (logoBitmap != null) {
+        val whiteCard = Paint().apply { color = Color.WHITE }
+        canvas.drawRoundRect(RectF(24f, 22f, 98f, 96f), 12f, 12f, whiteCard)
+        canvas.drawBitmap(logoBitmap, null, RectF(28f, 26f, 94f, 92f), null)
+      }
+    } catch (_: Exception) {
+      // Optional logo
+    }
+
     val titlePaint =
       Paint().apply {
         color = Color.WHITE
-        textSize = 22f
+        textSize = 21f
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         isAntiAlias = true
       }
@@ -217,9 +361,9 @@ object ExportAndPdfUtil {
         textSize = 12f
         isAntiAlias = true
       }
-    canvas.drawText(settings.institutionName, 36f, 52f, titlePaint)
-    canvas.drawText("OFFICIAL TUITION PAYMENT RECEIPT", 36f, 78f, subPaint)
-    canvas.drawText("${settings.physicalAddress} • ${settings.contactPhone}", 36f, 98f, subPaint)
+    canvas.drawText(settings.institutionName, 114f, 48f, titlePaint)
+    canvas.drawText("OFFICIAL TUITION PAYMENT RECEIPT", 114f, 74f, subPaint)
+    canvas.drawText("${settings.physicalAddress} • ${settings.contactPhone}", 114f, 94f, subPaint)
 
     val labelPaint =
       Paint().apply {
@@ -236,9 +380,18 @@ object ExportAndPdfUtil {
       }
 
     val dateStr =
-      payment.createdAt?.toDate()?.let {
-        SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(it)
-      } ?: SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date())
+      payment.paymentDate.ifBlank {
+        payment.createdAt?.toDate()?.let {
+          SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(it)
+        } ?: SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date())
+      }
+
+    val methodLabel =
+      when (payment.method) {
+        "opay_transfer" -> "OPay Bank Transfer (${JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NUMBER})"
+        "cash" -> "Cash / Office Payment"
+        else -> "Online Payment Gateway"
+      }
 
     val rows =
       listOf(
@@ -246,11 +399,10 @@ object ExportAndPdfUtil {
         "Student Name" to payment.studentName,
         "Student ID Number" to payment.studentIdNumber,
         "Programme" to payment.programmeTitle,
-        "Payment Method" to
-          if (payment.method == "opay_transfer") "OPay Bank Transfer" else "Online Payment Gateway",
+        "Payment Method" to methodLabel,
         "Amount Paid" to JyCatalogDefaults.formatNaira(payment.amountNaira),
         "Payment Status" to payment.status.uppercase(Locale.getDefault()),
-        "Date Recorded" to dateStr,
+        "Payment Date" to dateStr,
         "Remarks" to payment.adminRemarks.ifBlank { "Tuition Fee Payment" },
       )
 
@@ -273,6 +425,12 @@ object ExportAndPdfUtil {
         textSize = 11f
         isAntiAlias = true
       }
+    canvas.drawText(
+      "Official Bank: ${JyCatalogDefaults.OFFICIAL_OPAY_BANK} • ${JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NAME} (${JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NUMBER})",
+      36f,
+      756f,
+      footerPaint,
+    )
     canvas.drawText(
       "Generated by JY-Computers Student Management System • ${settings.email}",
       36f,

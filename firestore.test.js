@@ -30,12 +30,17 @@ function validStudentProfile(uid) {
     email: "alice@example.com",
     residentialAddress: "12 Tech Avenue, Abuja",
     stateOfOrigin: "FCT Abuja",
+    localGovernmentArea: "AMAC",
     nextOfKin: "Mary Johnson",
     nextOfKinPhone: "08087654321",
     passportPhotoBase64: "",
     selectedProgrammeId: "prog_coding",
     selectedProgrammeTitle: "Coding Programme",
+    trainingLevel: "Beginner",
     registrationDate: "2026-11-13",
+    approvalStatus: "pending",
+    paymentStatus: "unpaid",
+    courseProgressPercent: 0,
     status: "active",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -73,11 +78,36 @@ test("Unauthenticated user: cannot read any protected collection", async () => {
   await assertFails(unauthDb.collection("enrollments").where("userId", "==", ALICE_UID).get());
   await assertFails(unauthDb.collection("payments").where("userId", "==", ALICE_UID).get());
   await assertFails(unauthDb.collection("announcements").get());
+  await assertFails(unauthDb.collection("activity_logs").get());
 });
 
-test("Student registration & PII isolation: Alice creates own student profile; Bob cannot read Alice's PII", async () => {
+test("Student registration & PII isolation: Alice creates & updates own profile + directory; Bob cannot read Alice's PII", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: "alice@example.com", email_verified: true }).firestore();
   await assertSucceeds(aliceDb.collection("users").doc(ALICE_UID).set(validStudentProfile(ALICE_UID)));
+  await assertSucceeds(aliceDb.collection("directory").doc(ALICE_UID).set({
+    userId: ALICE_UID,
+    fullName: "Alice Johnson",
+    studentIdNumber: "JYC-2026-1001",
+    role: "student",
+    selectedProgrammeTitle: "Coding Programme",
+    isOnline: true,
+    lastSeenAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+
+  const batch = aliceDb.batch();
+  batch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    localGovernmentArea: "Bwari",
+    trainingLevel: "Intermediate",
+    updatedAt: serverTimestamp(),
+  });
+  batch.update(aliceDb.collection("directory").doc(ALICE_UID), {
+    fullName: "Alice Johnson",
+    isOnline: true,
+    lastSeenAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  await assertSucceeds(batch.commit());
 
   // Bob cannot read Alice's private PII profile
   const bobDb = testEnv.authenticatedContext(BOB_UID, { email: "bob@example.com", email_verified: true }).firestore();
@@ -85,13 +115,13 @@ test("Student registration & PII isolation: Alice creates own student profile; B
   await assertFails(bobDb.collection("users").get());
 });
 
-test("Privilege escalation blocked: student cannot self-assign admin role or ghost fields", async () => {
+test("Privilege escalation blocked: student cannot self-assign admin role, approvalStatus, or ghost fields", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
-  const badRole = { ...validStudentProfile(ALICE_UID), role: "admin" };
-  await assertFails(aliceDb.collection("users").doc(ALICE_UID).set(badRole));
-
-  const ghostField = { ...validStudentProfile(ALICE_UID), isVerified: true };
-  await assertFails(aliceDb.collection("users").doc(ALICE_UID).set(ghostField));
+  await assertFails(aliceDb.collection("users").doc(ALICE_UID).set({ ...validStudentProfile(ALICE_UID), role: "admin" }));
+  await assertFails(aliceDb.collection("users").doc(ALICE_UID).set({ ...validStudentProfile(ALICE_UID), approvalStatus: "approved" }));
+  await assertFails(aliceDb.collection("users").doc(ALICE_UID).set({ ...validStudentProfile(ALICE_UID), paymentStatus: "paid" }));
+  await assertFails(aliceDb.collection("users").doc(ALICE_UID).set({ ...validStudentProfile(ALICE_UID), courseProgressPercent: 50 }));
+  await assertFails(aliceDb.collection("users").doc(ALICE_UID).set({ ...validStudentProfile(ALICE_UID), isVerified: true }));
 });
 
 test("Email spoofing test: unverified admin email is rejected", async () => {
@@ -106,6 +136,7 @@ test("Email spoofing test: unverified admin email is rejected", async () => {
       duration: "1 Month",
       feeNaira: 1000,
       category: "Foundation",
+      level: "Beginner",
       active: true,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -113,7 +144,7 @@ test("Email spoofing test: unverified admin email is rejected", async () => {
   );
 });
 
-test("Bootstrapped Admin: verified joshua.dangana@gmail.com can manage programmes and settings", async () => {
+test("Bootstrapped Admin: verified joshua.dangana@gmail.com can manage programmes and append activity_logs", async () => {
   const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
     email: "joshua.dangana@gmail.com",
     email_verified: true,
@@ -126,6 +157,7 @@ test("Bootstrapped Admin: verified joshua.dangana@gmail.com can manage programme
       duration: "1 Month",
       feeNaira: 25000,
       category: "Foundation",
+      level: "Beginner",
       instructorUid: "",
       instructorName: "Staff Instructor",
       scheduleText: "Mon - Wed • 9:00 AM",
@@ -134,9 +166,37 @@ test("Bootstrapped Admin: verified joshua.dangana@gmail.com can manage programme
       updatedAt: serverTimestamp(),
     })
   );
+
+  await assertSucceeds(
+    adminDb.collection("activity_logs").doc("log_1").set({
+      actorUid: ADMIN_UID,
+      actorName: "Joshua Dangana",
+      action: "CREATE_COURSE",
+      targetId: "basic_computer",
+      details: "Created Basic Computer Course",
+      createdAt: serverTimestamp(),
+    })
+  );
+  // Activity logs are append-only (update/delete forbidden even for admin)
+  await assertFails(adminDb.collection("activity_logs").doc("log_1").update({ action: "TAMPERED" }));
+  await assertFails(adminDb.collection("activity_logs").doc("log_1").delete());
+
+  // Student cannot read or write activity_logs
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  await assertFails(aliceDb.collection("activity_logs").get());
+  await assertFails(
+    aliceDb.collection("activity_logs").doc("log_2").set({
+      actorUid: ALICE_UID,
+      actorName: "Alice",
+      action: "SPOOF",
+      targetId: "",
+      details: "Should fail",
+      createdAt: serverTimestamp(),
+    })
+  );
 });
 
-test("Payments: student can create pending payment, cannot self-approve, cannot read Bob's payments", async () => {
+test("Payments: student can create pending OPay transfer, cannot create cash/approved payment, cannot read Bob's payments", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
 
@@ -150,6 +210,7 @@ test("Payments: student can create pending payment, cannot self-approve, cannot 
     amountNaira: 450000,
     method: "opay_transfer",
     reference: "OPAY-99887766",
+    paymentDate: "2026-11-13",
     senderName: "Alice Johnson",
     evidenceBase64: "",
     status: "pending",
@@ -159,8 +220,9 @@ test("Payments: student can create pending payment, cannot self-approve, cannot 
   };
 
   await assertSucceeds(aliceDb.collection("payments").doc("pay_1").set(validPayment));
-  // Cannot self-approve on create
+  // Cannot self-approve or create cash payment as student
   await assertFails(aliceDb.collection("payments").doc("pay_2").set({ ...validPayment, status: "approved" }));
+  await assertFails(aliceDb.collection("payments").doc("pay_3").set({ ...validPayment, method: "cash" }));
   // Cannot update status after creation
   await assertFails(aliceDb.collection("payments").doc("pay_1").update({ status: "approved" }));
   // Bob cannot read Alice's payment

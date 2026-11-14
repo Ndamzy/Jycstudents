@@ -11,15 +11,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Schedule
@@ -41,6 +45,7 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -58,20 +63,28 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.model.Enrollment
+import com.example.data.model.InstitutionSettings
 import com.example.data.model.JyCatalogDefaults
 import com.example.data.model.LearningMaterial
 import com.example.data.model.Programme
+import com.example.data.model.UserProfile
 import com.example.ui.components.EmptyStateCard
+import com.example.ui.components.OfficialOpayBankCard
+import com.example.ui.components.SectionHeader
 import com.example.ui.components.StatusPill
+import com.example.ui.theme.JyCrimson
+import com.example.ui.theme.JyCrimsonContainer
 import com.example.ui.theme.JyEmerald
 import com.example.ui.theme.JyEmeraldContainer
 
 @Composable
 fun CourseCatalogueScreen(
   programmes: List<Programme>,
+  enrollments: List<Enrollment>,
   materials: List<LearningMaterial>,
   activeRole: String,
   onSaveProgramme: (Programme) -> Unit,
+  onToggleProgrammeActive: (Programme) -> Unit,
   onDeleteProgramme: (String) -> Unit,
   onAddLearningMaterial: (Programme, String, String, String) -> Unit,
   onGoToRegister: () -> Unit,
@@ -85,8 +98,11 @@ fun CourseCatalogueScreen(
   val canShareMaterial = activeRole == "admin" || activeRole == "instructor"
   val context = LocalContext.current
 
+  val enrollmentCounts =
+    remember(enrollments) { enrollments.groupingBy { it.programmeId }.eachCount() }
+
   val displayProgrammes =
-    remember(programmes, selectedCategory) {
+    remember(programmes, selectedCategory, isAdmin) {
       val base =
         programmes.ifEmpty {
           JyCatalogDefaults.DEFAULT_PROGRAMMES.map {
@@ -97,11 +113,13 @@ fun CourseCatalogueScreen(
               duration = it.duration,
               feeNaira = it.feeNaira,
               category = it.category,
+              level = it.level,
               scheduleText = it.scheduleText,
             )
           }
         }
-      if (selectedCategory == "All") base else base.filter { it.category == selectedCategory }
+      val visible = if (isAdmin) base else base.filter { it.active }
+      if (selectedCategory == "All") visible else visible.filter { it.category == selectedCategory }
     }
 
   if (editingProgramme != null) {
@@ -130,10 +148,10 @@ fun CourseCatalogueScreen(
     floatingActionButton = {
       if (selectedTab == 0 && isAdmin) {
         FloatingActionButton(
-          onClick = { editingProgramme = Programme(active = true) },
+          onClick = { editingProgramme = Programme(active = true, level = "All Levels") },
           modifier = Modifier.testTag("add_programme_fab"),
         ) {
-          Icon(Icons.Filled.Add, contentDescription = "Add Programme")
+          Icon(Icons.Filled.Add, contentDescription = "Add Course")
         }
       } else if (selectedTab == 1 && canShareMaterial) {
         FloatingActionButton(
@@ -150,7 +168,7 @@ fun CourseCatalogueScreen(
         Tab(
           selected = selectedTab == 0,
           onClick = { selectedTab = 0 },
-          text = { Text("Programmes (${displayProgrammes.size})") },
+          text = { Text("Courses (${displayProgrammes.size})") },
         )
         Tab(
           selected = selectedTab == 1,
@@ -178,6 +196,7 @@ fun CourseCatalogueScreen(
           }
 
           items(displayProgrammes, key = { it.id }) { prog ->
+            val enrolledCount = enrollmentCounts[prog.id] ?: 0
             Card(
               modifier = Modifier.fillMaxWidth(),
               shape = RoundedCornerShape(18.dp),
@@ -190,11 +209,25 @@ fun CourseCatalogueScreen(
                   horizontalArrangement = Arrangement.SpaceBetween,
                   verticalAlignment = Alignment.CenterVertically,
                 ) {
-                  StatusPill(
-                    text = prog.category,
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                  )
+                  Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    StatusPill(
+                      text = prog.category,
+                      containerColor = MaterialTheme.colorScheme.primaryContainer,
+                      contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                    StatusPill(
+                      text = prog.level.ifBlank { "All Levels" },
+                      containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                      contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                    if (isAdmin) {
+                      StatusPill(
+                        text = if (prog.active) "AVAILABLE" else "DISABLED",
+                        containerColor = if (prog.active) JyEmeraldContainer else JyCrimsonContainer,
+                        contentColor = if (prog.active) JyEmerald else JyCrimson,
+                      )
+                    }
+                  }
                   Text(
                     text = JyCatalogDefaults.formatNaira(prog.feeNaira),
                     style = MaterialTheme.typography.titleLarge,
@@ -212,13 +245,23 @@ fun CourseCatalogueScreen(
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                  Icon(Icons.Filled.Schedule, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                  Icon(Icons.Filled.Schedule, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(18.dp))
                   Spacer(modifier = Modifier.width(6.dp))
                   Text(
                     "Duration: ${prog.duration} • ${prog.scheduleText}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.secondary,
                     fontWeight = FontWeight.SemiBold,
+                  )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Icon(Icons.Filled.Group, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text(
+                    "$enrolledCount enrolled student(s)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                   )
                 }
                 Spacer(modifier = Modifier.height(12.dp))
@@ -230,17 +273,21 @@ fun CourseCatalogueScreen(
                   OutlinedButton(onClick = onGoToRegister) {
                     Icon(Icons.Filled.School, contentDescription = null)
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Register Course")
+                    Text(if (isAdmin) "Enrolment" else "Register Course")
                   }
                   if (isAdmin) {
-                    Row {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                      Switch(
+                        checked = prog.active,
+                        onCheckedChange = { onToggleProgrammeActive(prog) },
+                      )
                       IconButton(onClick = { editingProgramme = prog }) {
-                        Icon(Icons.Filled.Edit, contentDescription = "Edit programme")
+                        Icon(Icons.Filled.Edit, contentDescription = "Edit course")
                       }
                       IconButton(onClick = { onDeleteProgramme(prog.id) }) {
                         Icon(
                           Icons.Filled.Delete,
-                          contentDescription = "Remove programme",
+                          contentDescription = "Remove course",
                           tint = MaterialTheme.colorScheme.error,
                         )
                       }
@@ -313,25 +360,110 @@ fun CourseCatalogueScreen(
   }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CourseRegistrationScreen(
+  settings: InstitutionSettings,
+  activeRole: String,
+  allUsers: List<UserProfile>,
   programmes: List<Programme>,
   enrollments: List<Enrollment>,
   isBusy: Boolean,
   onEnroll: (Programme) -> Unit,
+  onAssignStudentToCourse: (UserProfile, Programme) -> Unit,
+  onUpdateEnrollmentStatus: (String, String) -> Unit,
+  onNotify: (String) -> Unit,
   onGoToPayment: () -> Unit,
 ) {
+  val isAdmin = activeRole == "admin"
   val enrolledIds = remember(enrollments) { enrollments.map { it.programmeId }.toSet() }
+  val students = remember(allUsers) { allUsers.filter { it.role == "student" || it.studentIdNumber.isNotBlank() } }
+
+  var selectedStudent by remember(students) { mutableStateOf(students.firstOrNull()) }
+  var selectedCourse by remember(programmes) { mutableStateOf(programmes.firstOrNull()) }
+  var stuExpanded by remember { mutableStateOf(false) }
+  var courseExpanded by remember { mutableStateOf(false) }
 
   LazyColumn(
     modifier = Modifier.fillMaxSize().testTag("course_registration_list"),
     contentPadding = PaddingValues(16.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
+    item {
+      OfficialOpayBankCard(settings = settings, onCopied = onNotify)
+    }
+
+    if (isAdmin && students.isNotEmpty() && programmes.isNotEmpty()) {
+      item {
+        Card(
+          modifier = Modifier.fillMaxWidth(),
+          shape = RoundedCornerShape(18.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+          Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            SectionHeader("Assign Student to Course (Admin)")
+            ExposedDropdownMenuBox(expanded = stuExpanded, onExpandedChange = { stuExpanded = it }) {
+              OutlinedTextField(
+                value = selectedStudent?.let { "${it.fullName} (${it.studentIdNumber})" } ?: "Select Student",
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Student") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = stuExpanded) },
+                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+              )
+              ExposedDropdownMenu(expanded = stuExpanded, onDismissRequest = { stuExpanded = false }) {
+                students.forEach { st ->
+                  DropdownMenuItem(
+                    text = { Text("${st.fullName} (${st.studentIdNumber})") },
+                    onClick = {
+                      selectedStudent = st
+                      stuExpanded = false
+                    },
+                  )
+                }
+              }
+            }
+            ExposedDropdownMenuBox(expanded = courseExpanded, onExpandedChange = { courseExpanded = it }) {
+              OutlinedTextField(
+                value = selectedCourse?.let { "${it.title} (${JyCatalogDefaults.formatNaira(it.feeNaira)})" } ?: "Select Course",
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Training Course") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = courseExpanded) },
+                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+              )
+              ExposedDropdownMenu(expanded = courseExpanded, onDismissRequest = { courseExpanded = false }) {
+                programmes.forEach { prog ->
+                  DropdownMenuItem(
+                    text = { Text("${prog.title} • ${prog.duration} (${JyCatalogDefaults.formatNaira(prog.feeNaira)})") },
+                    onClick = {
+                      selectedCourse = prog
+                      courseExpanded = false
+                    },
+                  )
+                }
+              }
+            }
+            Button(
+              onClick = {
+                val st = selectedStudent ?: return@Button
+                val pr = selectedCourse ?: return@Button
+                onAssignStudentToCourse(st, pr)
+              },
+              enabled = !isBusy && selectedStudent != null && selectedCourse != null,
+              modifier = Modifier.fillMaxWidth().testTag("admin_assign_course_button"),
+            ) {
+              Text("Assign & Create Course Enrolment")
+            }
+          }
+        }
+      }
+    }
+
     if (enrollments.isNotEmpty()) {
       item {
         Text(
-          "Your Active Enrollments",
+          if (isAdmin) "All Course Enrolments (${enrollments.size})" else "Your Active Enrolments",
           style = MaterialTheme.typography.titleLarge,
           fontWeight = FontWeight.Bold,
         )
@@ -348,7 +480,12 @@ fun CourseRegistrationScreen(
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically,
             ) {
-              Text(enr.programmeTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+              Column(modifier = Modifier.weight(1f)) {
+                Text(enr.programmeTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                if (isAdmin) {
+                  Text("${enr.studentName} (${enr.studentIdNumber})", style = MaterialTheme.typography.bodySmall)
+                }
+              }
               StatusPill(
                 text = enr.status.uppercase(),
                 containerColor = JyEmeraldContainer,
@@ -361,7 +498,17 @@ fun CourseRegistrationScreen(
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (enr.outstandingNaira > 0) {
+            if (isAdmin && enr.status != "completed") {
+              Spacer(modifier = Modifier.height(8.dp))
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { onUpdateEnrollmentStatus(enr.id, "completed") }) {
+                  Text("Mark Completed")
+                }
+                OutlinedButton(onClick = { onUpdateEnrollmentStatus(enr.id, "graduated") }) {
+                  Text("Mark Graduated")
+                }
+              }
+            } else if (!isAdmin && enr.outstandingNaira > 0) {
               Spacer(modifier = Modifier.height(10.dp))
               Button(onClick = onGoToPayment) { Text("Pay Outstanding Tuition") }
             }
@@ -370,41 +517,43 @@ fun CourseRegistrationScreen(
       }
     }
 
-    item {
-      Spacer(modifier = Modifier.height(4.dp))
-      Text(
-        "Available Programmes to Register",
-        style = MaterialTheme.typography.titleLarge,
-        fontWeight = FontWeight.Bold,
-      )
-    }
+    if (!isAdmin) {
+      item {
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+          "Available Courses to Register",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold,
+        )
+      }
 
-    items(programmes, key = { "reg_${it.id}" }) { prog ->
-      val alreadyEnrolled = prog.id in enrolledIds
-      Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-      ) {
-        Row(
-          modifier = Modifier.padding(16.dp),
-          verticalAlignment = Alignment.CenterVertically,
+      items(programmes.filter { it.active }, key = { "reg_${it.id}" }) { prog ->
+        val alreadyEnrolled = prog.id in enrolledIds
+        Card(
+          modifier = Modifier.fillMaxWidth(),
+          shape = RoundedCornerShape(16.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
-          Column(modifier = Modifier.weight(1f)) {
-            Text(prog.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text(
-              "${prog.duration} • ${JyCatalogDefaults.formatNaira(prog.feeNaira)}",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.primary,
-              fontWeight = FontWeight.SemiBold,
-            )
-          }
-          Button(
-            onClick = { onEnroll(prog) },
-            enabled = !alreadyEnrolled && !isBusy,
-            modifier = Modifier.testTag("enroll_${prog.id}_button"),
+          Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
           ) {
-            Text(if (alreadyEnrolled) "Enrolled" else "Register")
+            Column(modifier = Modifier.weight(1f)) {
+              Text(prog.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+              Text(
+                "${prog.duration} • ${prog.level} • ${JyCatalogDefaults.formatNaira(prog.feeNaira)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+              )
+            }
+            Button(
+              onClick = { onEnroll(prog) },
+              enabled = !alreadyEnrolled && !isBusy,
+              modifier = Modifier.testTag("enroll_${prog.id}_button"),
+            ) {
+              Text(if (alreadyEnrolled) "Enrolled" else "Register")
+            }
           }
         }
       }
@@ -412,6 +561,7 @@ fun CourseRegistrationScreen(
   }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ProgrammeEditorDialog(
   initial: Programme,
@@ -423,21 +573,47 @@ private fun ProgrammeEditorDialog(
   var duration by remember { mutableStateOf(initial.duration.ifBlank { "3 Months" }) }
   var feeStr by remember { mutableStateOf(if (initial.feeNaira > 0) initial.feeNaira.toString() else "50000") }
   var category by remember { mutableStateOf(initial.category.ifBlank { "Foundation" }) }
+  var level by remember { mutableStateOf(initial.level.ifBlank { "All Levels" }) }
+  var levelExpanded by remember { mutableStateOf(false) }
   var instructorName by remember { mutableStateOf(initial.instructorName.ifBlank { "JY-Computers Faculty" }) }
   var scheduleText by remember { mutableStateOf(initial.scheduleText.ifBlank { "Mon - Wed • 10:00 AM" }) }
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    title = { Text(if (initial.id.isBlank()) "Add Training Programme" else "Edit Programme") },
+    title = { Text(if (initial.id.isBlank()) "Create Training Course" else "Edit Course") },
     text = {
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("Programme Title") }, singleLine = true)
+      Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("Course Title") }, singleLine = true)
         OutlinedTextField(value = duration, onValueChange = { duration = it }, label = { Text("Duration (e.g. 6 Months)") }, singleLine = true)
-        OutlinedTextField(value = feeStr, onValueChange = { feeStr = it.filter { c -> c.isDigit() } }, label = { Text("Tuition Fee (₦)") }, singleLine = true)
-        OutlinedTextField(value = category, onValueChange = { category = it }, label = { Text("Category") }, singleLine = true)
+        OutlinedTextField(value = feeStr, onValueChange = { feeStr = it.filter { c -> c.isDigit() } }, label = { Text("Course Fee (₦)") }, singleLine = true)
+        OutlinedTextField(value = category, onValueChange = { category = it }, label = { Text("Category (Foundation/Diploma/Hardware/Software)") }, singleLine = true)
+        ExposedDropdownMenuBox(expanded = levelExpanded, onExpandedChange = { levelExpanded = it }) {
+          OutlinedTextField(
+            value = level,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Course Level") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = levelExpanded) },
+            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+          )
+          ExposedDropdownMenu(expanded = levelExpanded, onDismissRequest = { levelExpanded = false }) {
+            (JyCatalogDefaults.TRAINING_LEVELS + "All Levels").forEach { lvl ->
+              DropdownMenuItem(
+                text = { Text(lvl) },
+                onClick = {
+                  level = lvl
+                  levelExpanded = false
+                },
+              )
+            }
+          }
+        }
         OutlinedTextField(value = instructorName, onValueChange = { instructorName = it }, label = { Text("Instructor Name") }, singleLine = true)
         OutlinedTextField(value = scheduleText, onValueChange = { scheduleText = it }, label = { Text("Class Schedule") }, singleLine = true)
-        OutlinedTextField(value = description, onValueChange = { description = it }, label = { Text("Description") })
+        OutlinedTextField(value = description, onValueChange = { description = it }, label = { Text("Course Description") })
       }
     },
     confirmButton = {
@@ -452,9 +628,9 @@ private fun ProgrammeEditorDialog(
                 duration = duration,
                 feeNaira = fee,
                 category = category,
+                level = level,
                 instructorName = instructorName,
                 scheduleText = scheduleText,
-                active = true,
               )
             )
           }

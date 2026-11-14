@@ -34,11 +34,16 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
         email = "alice@test.com",
         residentialAddress = "10 Tech Road, Abuja",
         stateOfOrigin = "FCT Abuja",
+        localGovernmentArea = "AMAC",
         nextOfKin = "Grace Student",
         nextOfKinPhone = "08099887766",
         selectedProgrammeId = "coding_programme",
         selectedProgrammeTitle = "Coding Programme",
+        trainingLevel = "Intermediate",
         registrationDate = "2026-11-13",
+        approvalStatus = "pending",
+        paymentStatus = "unpaid",
+        courseProgressPercent = 0,
         status = "active",
       )
 
@@ -47,6 +52,14 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
 
     val loadedProfile = withTimeout(FLOW_TIMEOUT_MS) { profileRepo.observeUserProfile(uid).first { it != null } }
     assertEquals("Alice Student", loadedProfile?.fullName)
+    assertEquals("AMAC", loadedProfile?.localGovernmentArea)
+    assertEquals("Intermediate", loadedProfile?.trainingLevel)
+
+    val updateResult =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        profileRepo.updateStudentProfile(profile.copy(localGovernmentArea = "Bwari"))
+      }
+    assertTrue(updateResult.isSuccess)
 
     val programme =
       Programme(
@@ -84,11 +97,35 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
           amountNaira = 200_000L,
           method = "opay_transfer",
           reference = "OPAY-${UUID.randomUUID().toString().take(8)}",
+          paymentDate = "2026-11-13",
           senderName = "Alice Student",
           evidenceBase64 = "",
         )
       }
     assertTrue(payResult.isSuccess)
+
+    var cashDenied = false
+    try {
+      val cashRes =
+        withTimeout(DEFAULT_TIMEOUT_MS) {
+          financeRepo.submitPayment(
+            studentUid = uid,
+            studentName = "Alice Student",
+            studentIdNumber = "JYC-2026-9901",
+            enrollment = Enrollment(id = enrollmentId, programmeId = programme.id, programmeTitle = programme.title),
+            amountNaira = 50_000L,
+            method = "cash",
+            reference = "CASH-${UUID.randomUUID().toString().take(8)}",
+            paymentDate = "2026-11-13",
+            senderName = "Alice Student",
+            evidenceBase64 = "",
+          )
+        }
+      cashDenied = cashRes.isFailure
+    } catch (e: Exception) {
+      cashDenied = e.unwrapFirestoreException()?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
+    }
+    assertTrue("Students must not create cash payments directly", cashDenied)
   }
 
   @Test
@@ -107,10 +144,12 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
         email = "alice@test.com",
         residentialAddress = "10 Tech Road",
         stateOfOrigin = "FCT Abuja",
+        localGovernmentArea = "AMAC",
         nextOfKin = "Grace",
         nextOfKinPhone = "08099887766",
         selectedProgrammeId = "diploma_1",
         selectedProgrammeTitle = "Diploma 1",
+        trainingLevel = "Beginner",
         registrationDate = "2026-11-13",
         status = "active",
       )
@@ -124,6 +163,14 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
       denied = e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
     }
     assertTrue("Expected PERMISSION_DENIED when Bob reads Alice PII", denied)
+
+    var logsDenied = false
+    try {
+      withTimeout(DEFAULT_TIMEOUT_MS) { firestore.collection("activity_logs").get().await() }
+    } catch (e: FirebaseFirestoreException) {
+      logsDenied = e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
+    }
+    assertTrue("Expected PERMISSION_DENIED when non-admin reads activity_logs", logsDenied)
   }
 
   @Test

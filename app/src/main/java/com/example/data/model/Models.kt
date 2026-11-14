@@ -8,16 +8,15 @@ import com.google.firebase.firestore.ServerTimestamp
 @IgnoreExtraProperties
 data class InstitutionSettings(
   @DocumentId val id: String = "institution",
-  val institutionName: String = "JY-Computers Institute",
-  val motto: String = "Empowering Digital Excellence & Innovation",
+  val institutionName: String = "JY-COMPUTERS",
+  val motto: String = "LEARN • PRACTICE • EXCEL — Empowering People Through Technology",
   val contactPhone: String = "+234 800 592 6678",
   val email: String = "admissions@jycomputers.edu.ng",
   val physicalAddress: String = "Plot 24, Technology Drive, Abuja, Nigeria",
-  val opayBankName: String = "OPay Digital Services",
-  val opayAccountName: String = "JY-Computers Training Academy",
-  val opayAccountNumber: String = "8030001122",
-  val opayInstructions: String =
-    "Transfer the exact tuition amount to the OPay account above. Enter your Student ID in the narration, then upload your receipt screenshot and transaction reference below.",
+  val opayBankName: String = JyCatalogDefaults.OFFICIAL_OPAY_BANK,
+  val opayAccountName: String = JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NAME,
+  val opayAccountNumber: String = JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NUMBER,
+  val opayInstructions: String = JyCatalogDefaults.OFFICIAL_OPAY_INSTRUCTIONS,
   val onlinePaymentUrl: String = "",
   val activeSession: String = "2026/2027 Session",
   val signatoryName: String = "Dr. Joshua Dangana",
@@ -33,6 +32,7 @@ data class Programme(
   val duration: String = "",
   val feeNaira: Long = 0L,
   val category: String = "Foundation",
+  val level: String = "All Levels",
   val instructorUid: String = "",
   val instructorName: String = "Faculty Instructor",
   val scheduleText: String = "Mon - Thu • 10:00 AM",
@@ -54,12 +54,17 @@ data class UserProfile(
   val email: String = "",
   val residentialAddress: String = "",
   val stateOfOrigin: String = "",
+  val localGovernmentArea: String = "",
   val nextOfKin: String = "",
   val nextOfKinPhone: String = "",
   val passportPhotoBase64: String = "",
   val selectedProgrammeId: String = "",
   val selectedProgrammeTitle: String = "",
+  val trainingLevel: String = "Beginner",
   val registrationDate: String = "",
+  val approvalStatus: String = "pending",
+  val paymentStatus: String = "unpaid",
+  val courseProgressPercent: Int = 0,
   val status: String = "active",
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null,
@@ -123,6 +128,7 @@ data class Payment(
   val amountNaira: Long = 0L,
   val method: String = "opay_transfer",
   val reference: String = "",
+  val paymentDate: String = "",
   val senderName: String = "",
   val evidenceBase64: String = "",
   val status: String = "pending",
@@ -276,8 +282,26 @@ data class BlockedUser(
   @ServerTimestamp val createdAt: Timestamp? = null,
 )
 
+@IgnoreExtraProperties
+data class ActivityLog(
+  @DocumentId val id: String = "",
+  val actorUid: String = "",
+  val actorName: String = "",
+  val action: String = "",
+  val targetId: String = "",
+  val details: String = "",
+  @ServerTimestamp val createdAt: Timestamp? = null,
+)
+
 object JyCatalogDefaults {
   const val BOOTSTRAP_ADMIN_EMAIL = "joshua.dangana@gmail.com"
+  const val OFFICIAL_OPAY_ACCOUNT_NAME = "JY-COMPUTERS"
+  const val OFFICIAL_OPAY_ACCOUNT_NUMBER = "6118366524"
+  const val OFFICIAL_OPAY_BANK = "OPay"
+  const val OFFICIAL_OPAY_INSTRUCTIONS =
+    "Please make your training registration or course payment to the official JY-COMPUTERS account provided above. After making payment, submit your payment evidence or transaction reference for administrative verification."
+
+  val TRAINING_LEVELS = listOf("Beginner", "Intermediate", "Advanced")
 
   val DEFAULT_PROGRAMMES =
     listOf(
@@ -289,6 +313,7 @@ object JyCatalogDefaults {
         duration = "1 Month",
         feeNaira = 25_000L,
         category = "Foundation",
+        level = "Beginner",
         scheduleText = "Mon & Wed • 9:00 AM - 11:00 AM",
       ),
       ProgrammeSeed(
@@ -299,6 +324,7 @@ object JyCatalogDefaults {
         duration = "2 Months",
         feeNaira = 47_000L,
         category = "Foundation",
+        level = "Beginner",
         scheduleText = "Tue & Thu • 9:00 AM - 12:00 PM",
       ),
       ProgrammeSeed(
@@ -309,6 +335,7 @@ object JyCatalogDefaults {
         duration = "3 Months",
         feeNaira = 50_000L,
         category = "Diploma",
+        level = "Intermediate",
         scheduleText = "Mon, Wed & Fri • 11:30 AM - 1:30 PM",
       ),
       ProgrammeSeed(
@@ -319,6 +346,7 @@ object JyCatalogDefaults {
         duration = "6 Months",
         feeNaira = 80_000L,
         category = "Diploma",
+        level = "Advanced",
         scheduleText = "Mon - Thu • 2:00 PM - 4:00 PM",
       ),
       ProgrammeSeed(
@@ -329,6 +357,7 @@ object JyCatalogDefaults {
         duration = "6 Months",
         feeNaira = 200_000L,
         category = "Hardware",
+        level = "Intermediate",
         scheduleText = "Tue, Thu & Fri • 10:00 AM - 1:00 PM",
       ),
       ProgrammeSeed(
@@ -339,6 +368,7 @@ object JyCatalogDefaults {
         duration = "1 Year",
         feeNaira = 350_000L,
         category = "Hardware",
+        level = "Advanced",
         scheduleText = "Mon - Fri • 1:00 PM - 4:00 PM",
       ),
       ProgrammeSeed(
@@ -349,6 +379,7 @@ object JyCatalogDefaults {
         duration = "6 Months",
         feeNaira = 250_000L,
         category = "Hardware",
+        level = "Intermediate",
         scheduleText = "Wed & Fri • 9:00 AM - 12:30 PM",
       ),
       ProgrammeSeed(
@@ -359,6 +390,7 @@ object JyCatalogDefaults {
         duration = "6 Months",
         feeNaira = 450_000L,
         category = "Software",
+        level = "All Levels",
         scheduleText = "Mon, Wed & Fri • 10:00 AM - 1:00 PM",
       ),
       ProgrammeSeed(
@@ -369,6 +401,7 @@ object JyCatalogDefaults {
         duration = "6 Months",
         feeNaira = 450_000L,
         category = "Software",
+        level = "All Levels",
         scheduleText = "Tue, Thu & Sat • 10:00 AM - 1:00 PM",
       ),
     )
@@ -404,5 +437,6 @@ data class ProgrammeSeed(
   val duration: String,
   val feeNaira: Long,
   val category: String,
+  val level: String = "All Levels",
   val scheduleText: String,
 )

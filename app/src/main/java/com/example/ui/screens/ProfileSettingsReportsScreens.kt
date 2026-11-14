@@ -3,7 +3,6 @@ package com.example.ui.screens
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -22,12 +21,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SupervisorAccount
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -57,34 +59,40 @@ import com.example.data.model.Enrollment
 import com.example.data.model.InstitutionSettings
 import com.example.data.model.JyCatalogDefaults
 import com.example.data.model.Payment
-import com.example.data.model.Programme
 import com.example.data.model.UserProfile
 import com.example.ui.components.Base64Avatar
 import com.example.ui.components.JyGradientHeaderCard
+import com.example.ui.components.OfficialJyLogoBadge
+import com.example.ui.components.OfficialOpayBankCard
+import com.example.ui.components.PassportCameraCaptureDialog
 import com.example.ui.components.SectionHeader
-import com.example.ui.components.StatusPill
 import com.example.util.AppThemeMode
 import com.example.util.ExportAndPdfUtil
 import com.example.util.ImageCompressionUtil
+import java.util.Date
 import kotlinx.coroutines.launch
 
 @Composable
 fun StudentProfileScreen(
   profile: UserProfile?,
+  settings: InstitutionSettings,
   currentEmail: String,
   themeMode: AppThemeMode,
   isBusy: Boolean,
   onUpdateProfile: (UserProfile) -> Unit,
   onThemeModeChange: (AppThemeMode) -> Unit,
+  onNotify: (String) -> Unit,
   onSignOut: () -> Unit,
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
 
   var editing by remember { mutableStateOf(false) }
+  var showCamera by remember { mutableStateOf(false) }
   var fullName by remember(profile) { mutableStateOf(profile?.fullName ?: "") }
   var phone by remember(profile) { mutableStateOf(profile?.phoneNumber ?: "") }
   var address by remember(profile) { mutableStateOf(profile?.residentialAddress ?: "") }
+  var lga by remember(profile) { mutableStateOf(profile?.localGovernmentArea ?: "") }
   var nextOfKin by remember(profile) { mutableStateOf(profile?.nextOfKin ?: "") }
   var nextOfKinPhone by remember(profile) { mutableStateOf(profile?.nextOfKinPhone ?: "") }
   var passportBase64 by remember(profile) { mutableStateOf(profile?.passportPhotoBase64 ?: "") }
@@ -93,14 +101,27 @@ fun StudentProfileScreen(
     rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
       if (uri != null && profile != null) {
         scope.launch {
-          val encoded = ImageCompressionUtil.compressUriToBase64(context, uri, maxDimension = 360, quality = 70)
-          if (encoded != null) {
-            passportBase64 = encoded
-            onUpdateProfile(profile.copy(passportPhotoBase64 = encoded))
+          val res = ImageCompressionUtil.validateAndCompressUri(context, uri, maxDimension = 380, quality = 70)
+          if (res.base64 != null) {
+            passportBase64 = res.base64
+            onUpdateProfile(profile.copy(passportPhotoBase64 = res.base64))
+          } else {
+            onNotify(res.errorMessage ?: "Invalid photograph")
           }
         }
       }
     }
+
+  if (showCamera && profile != null) {
+    PassportCameraCaptureDialog(
+      onPhotoAccepted = { base64 ->
+        passportBase64 = base64
+        onUpdateProfile(profile.copy(passportPhotoBase64 = base64))
+        showCamera = false
+      },
+      onDismiss = { showCamera = false },
+    )
+  }
 
   Column(
     modifier =
@@ -109,8 +130,9 @@ fun StudentProfileScreen(
   ) {
     JyGradientHeaderCard(
       title = profile?.fullName?.ifBlank { "Account Profile" } ?: "Account Profile",
-      subtitle = "${profile?.studentIdNumber ?: "Staff / Admin"} • $currentEmail",
+      subtitle = "${profile?.studentIdNumber ?: "Administrator"} • $currentEmail",
       badgeText = (profile?.role ?: "USER").uppercase(),
+      showOfficialLogo = true,
     ) {
       Spacer(modifier = Modifier.height(12.dp))
       Row(verticalAlignment = Alignment.CenterVertically) {
@@ -127,9 +149,9 @@ fun StudentProfileScreen(
             fontWeight = FontWeight.SemiBold,
           )
           Text(
-            "Tap below to update photo or personal details",
+            "Approval: ${(profile?.approvalStatus ?: "approved").uppercase()} • Progress: ${profile?.courseProgressPercent ?: 0}%",
             style = MaterialTheme.typography.bodySmall,
-            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.8f),
+            color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f),
           )
         }
       }
@@ -156,26 +178,40 @@ fun StudentProfileScreen(
           }
 
           if (!editing) {
-            ProfileFieldRow("Student ID", profile.studentIdNumber)
-            ProfileFieldRow("Programme", profile.selectedProgrammeTitle)
+            ProfileFieldRow("Registration Number", profile.studentIdNumber)
+            ProfileFieldRow("Selected Course", "${profile.selectedProgrammeTitle} (${profile.trainingLevel})")
+            ProfileFieldRow("Approval / Account Status", "${profile.approvalStatus.uppercase()} / ${profile.status.uppercase()}")
             ProfileFieldRow("Gender / DOB", "${profile.gender} • ${profile.dateOfBirth}")
             ProfileFieldRow("Phone", profile.phoneNumber)
             ProfileFieldRow("Address", profile.residentialAddress)
-            ProfileFieldRow("State of Origin", profile.stateOfOrigin)
+            ProfileFieldRow("State / LGA", "${profile.stateOfOrigin} / ${profile.localGovernmentArea}")
             ProfileFieldRow("Next of Kin", "${profile.nextOfKin} (${profile.nextOfKinPhone})")
             ProfileFieldRow("Registration Date", profile.registrationDate)
-            OutlinedButton(
-              onClick = {
-                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-              },
-              modifier = Modifier.fillMaxWidth(),
-            ) {
-              Text("Update Passport Photograph")
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              OutlinedButton(
+                onClick = {
+                  photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                },
+                modifier = Modifier.weight(1f),
+              ) {
+                Icon(Icons.Filled.PhotoLibrary, contentDescription = null)
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Upload Photo")
+              }
+              OutlinedButton(
+                onClick = { showCamera = true },
+                modifier = Modifier.weight(1f),
+              ) {
+                Icon(Icons.Filled.CameraAlt, contentDescription = null)
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Camera")
+              }
             }
           } else {
             OutlinedTextField(value = fullName, onValueChange = { fullName = it }, label = { Text("Full Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Phone Number") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(value = address, onValueChange = { address = it }, label = { Text("Residential Address") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(value = lga, onValueChange = { lga = it }, label = { Text("Local Government Area") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(value = nextOfKin, onValueChange = { nextOfKin = it }, label = { Text("Next of Kin") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(value = nextOfKinPhone, onValueChange = { nextOfKinPhone = it }, label = { Text("Next of Kin Phone") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Button(
@@ -185,6 +221,7 @@ fun StudentProfileScreen(
                     fullName = fullName,
                     phoneNumber = phone,
                     residentialAddress = address,
+                    localGovernmentArea = lga,
                     nextOfKin = nextOfKin,
                     nextOfKinPhone = nextOfKinPhone,
                     passportPhotoBase64 = passportBase64,
@@ -197,12 +234,14 @@ fun StudentProfileScreen(
             ) {
               Icon(Icons.Filled.Save, contentDescription = null)
               Spacer(modifier = Modifier.width(6.dp))
-              Text("Save Profile Changes")
+              Text("Save Permitted Profile Changes")
             }
           }
         }
       }
     }
+
+    AboutAndContactCard(settings = settings, onNotify = onNotify)
 
     Card(
       modifier = Modifier.fillMaxWidth(),
@@ -235,6 +274,46 @@ fun StudentProfileScreen(
 }
 
 @Composable
+fun AboutAndContactCard(
+  settings: InstitutionSettings,
+  onNotify: (String) -> Unit,
+) {
+  Card(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(18.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+  ) {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        OfficialJyLogoBadge(size = 64.dp, cornerRadius = 12.dp)
+        Spacer(modifier = Modifier.width(12.dp))
+        Column {
+          Text("About & Contact", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+          Text(settings.institutionName, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+          Text(settings.motto, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+      }
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Filled.LocationOn, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(settings.physicalAddress, style = MaterialTheme.typography.bodySmall)
+      }
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Filled.Phone, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(settings.contactPhone, style = MaterialTheme.typography.bodySmall)
+      }
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Filled.Email, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(settings.email, style = MaterialTheme.typography.bodySmall)
+      }
+      OfficialOpayBankCard(settings = settings, onCopied = onNotify)
+    }
+  }
+}
+
+@Composable
 private fun ProfileFieldRow(label: String, value: String) {
   Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
     Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -245,12 +324,10 @@ private fun ProfileFieldRow(label: String, value: String) {
 @Composable
 fun AdminSettingsScreen(
   settings: InstitutionSettings,
-  allUsers: List<UserProfile>,
-  programmes: List<Programme>,
   isBusy: Boolean,
   onSaveSettings: (InstitutionSettings) -> Unit,
   onSeedDefaults: () -> Unit,
-  onAssignRole: (String, String, String, String, String, List<String>) -> Unit,
+  onNotify: (String) -> Unit,
 ) {
   var name by remember(settings) { mutableStateOf(settings.institutionName) }
   var motto by remember(settings) { mutableStateOf(settings.motto) }
@@ -271,6 +348,8 @@ fun AdminSettingsScreen(
       Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp).testTag("admin_settings_screen"),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
+    AboutAndContactCard(settings = settings, onNotify = onNotify)
+
     SectionHeader("Institution & Branding")
     OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Institution Name") }, modifier = Modifier.fillMaxWidth())
     OutlinedTextField(value = motto, onValueChange = { motto = it }, label = { Text("Motto / Tagline") }, modifier = Modifier.fillMaxWidth())
@@ -327,47 +406,6 @@ fun AdminSettingsScreen(
       Spacer(modifier = Modifier.width(8.dp))
       Text("Initialize Default 9 Programmes & Community Chat")
     }
-
-    SectionHeader("User Role & Instructor Management")
-    allUsers.forEach { user ->
-      Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-      ) {
-        Row(
-          modifier = Modifier.padding(12.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Icon(Icons.Filled.SupervisorAccount, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-          Spacer(modifier = Modifier.width(10.dp))
-          Column(modifier = Modifier.weight(1f)) {
-            Text(user.fullName, fontWeight = FontWeight.SemiBold)
-            Text("${user.email} • Role: ${user.role.uppercase()}", style = MaterialTheme.typography.bodySmall)
-          }
-          if (user.role != "instructor") {
-            OutlinedButton(
-              onClick = {
-                onAssignRole(
-                  user.userId,
-                  user.fullName,
-                  user.email,
-                  "instructor",
-                  "Faculty Instructor",
-                  programmes.map { it.id },
-                )
-              }
-            ) { Text("Make Instructor") }
-          } else {
-            StatusPill(
-              "INSTRUCTOR",
-              MaterialTheme.colorScheme.primaryContainer,
-              MaterialTheme.colorScheme.onPrimaryContainer,
-            )
-          }
-        }
-      }
-    }
     Spacer(modifier = Modifier.height(24.dp))
   }
 }
@@ -386,33 +424,65 @@ fun ReportsAndAnalyticsScreen(
   val reportTypes =
     listOf(
       "Student Registration",
+      "Active Students",
+      "Graduated Students",
       "Course Enrolment",
-      "Payment Report",
-      "Outstanding Payments",
+      "Payment Records",
+      "Outstanding Balances",
       "Attendance Report",
       "Academic Performance",
-      "Graduation Report",
     )
+  val periodFilters = listOf("All Time", "Daily", "Weekly", "Monthly", "Annual")
   var selectedReport by remember { mutableStateOf(reportTypes.first()) }
+  var selectedPeriod by remember { mutableStateOf("All Time") }
+
+  val nowMs = remember { System.currentTimeMillis() }
+  fun inSelectedPeriod(tsSeconds: Long?): Boolean {
+    if (selectedPeriod == "All Time" || tsSeconds == null) return true
+    val ageMs = nowMs - (tsSeconds * 1000L)
+    return when (selectedPeriod) {
+      "Daily" -> ageMs <= 24L * 3600L * 1000L
+      "Weekly" -> ageMs <= 7L * 24L * 3600L * 1000L
+      "Monthly" -> ageMs <= 30L * 24L * 3600L * 1000L
+      "Annual" -> ageMs <= 365L * 24L * 3600L * 1000L
+      else -> true
+    }
+  }
+
+  val students = remember(allUsers) { allUsers.filter { it.role == "student" || it.studentIdNumber.isNotBlank() } }
 
   val (headers, rows) =
-    remember(selectedReport, allUsers, enrollments, payments, attendance, results, certificates) {
+    remember(selectedReport, selectedPeriod, students, enrollments, payments, attendance, results, certificates) {
       when (selectedReport) {
         "Student Registration" ->
-          listOf("Student ID", "Full Name", "Programme", "Status") to
-            allUsers.map { listOf(it.studentIdNumber, it.fullName, it.selectedProgrammeTitle, it.status) }
+          listOf("Reg No", "Full Name", "Course", "Level", "Approval") to
+            students.filter { inSelectedPeriod(it.createdAt?.seconds) }.map {
+              listOf(it.studentIdNumber, it.fullName, it.selectedProgrammeTitle, it.trainingLevel, it.approvalStatus)
+            }
+        "Active Students" ->
+          listOf("Reg No", "Full Name", "Course", "Progress", "Phone") to
+            students.filter { it.status == "active" && inSelectedPeriod(it.createdAt?.seconds) }.map {
+              listOf(it.studentIdNumber, it.fullName, it.selectedProgrammeTitle, "${it.courseProgressPercent}%", it.phoneNumber)
+            }
+        "Graduated Students" ->
+          listOf("Reg No", "Full Name", "Course", "Reg Date", "Status") to
+            students.filter { it.status == "graduated" && inSelectedPeriod(it.createdAt?.seconds) }.map {
+              listOf(it.studentIdNumber, it.fullName, it.selectedProgrammeTitle, it.registrationDate, it.status)
+            }
         "Course Enrolment" ->
           listOf("Student", "Course", "Session", "Status") to
-            enrollments.map { listOf(it.studentName, it.programmeTitle, it.session, it.status) }
-        "Payment Report" ->
-          listOf("Reference", "Student", "Amount", "Status") to
-            payments.map {
-              listOf(it.reference, it.studentName, JyCatalogDefaults.formatNaira(it.amountNaira), it.status)
+            enrollments.filter { inSelectedPeriod(it.createdAt?.seconds) }.map {
+              listOf(it.studentName, it.programmeTitle, it.session, it.status)
             }
-        "Outstanding Payments" ->
+        "Payment Records" ->
+          listOf("Reference", "Student", "Amount", "Method", "Status") to
+            payments.filter { inSelectedPeriod(it.createdAt?.seconds) }.map {
+              listOf(it.reference, it.studentName, JyCatalogDefaults.formatNaira(it.amountNaira), it.method, it.status)
+            }
+        "Outstanding Balances" ->
           listOf("Student", "Course", "Fee", "Balance") to
             enrollments
-              .filter { it.outstandingNaira > 0 }
+              .filter { it.outstandingNaira > 0 && inSelectedPeriod(it.createdAt?.seconds) }
               .map {
                 listOf(
                   it.studentName,
@@ -423,16 +493,13 @@ fun ReportsAndAnalyticsScreen(
               }
         "Attendance Report" ->
           listOf("Date", "Student", "Course", "Status") to
-            attendance.map { listOf(it.dateKey, it.studentName, it.programmeTitle, it.status) }
-        "Academic Performance" ->
-          listOf("Student", "Course", "Score", "Grade") to
-            results.map {
-              listOf(it.studentName, it.programmeTitle, "${it.totalScore}/100", it.grade)
+            attendance.filter { inSelectedPeriod(it.createdAt?.seconds) }.map {
+              listOf(it.dateKey, it.studentName, it.programmeTitle, it.status)
             }
         else ->
-          listOf("Student", "Student ID", "Programme", "Verify Code") to
-            certificates.map {
-              listOf(it.studentName, it.studentIdNumber, it.programmeTitle, it.verificationCode)
+          listOf("Student", "Course", "Score", "Grade") to
+            results.filter { inSelectedPeriod(it.createdAt?.seconds) }.map {
+              listOf(it.studentName, it.programmeTitle, "${it.totalScore}/100", it.grade)
             }
       }
     }
@@ -445,8 +512,9 @@ fun ReportsAndAnalyticsScreen(
     item {
       JyGradientHeaderCard(
         title = "Reports & Data Export",
-        subtitle = "Generate institutional PDF and Excel-compatible CSV reports",
+        subtitle = "$selectedReport • $selectedPeriod Filter",
         badgeText = "${rows.size} Rows",
+        showOfficialLogo = true,
       )
     }
 
@@ -460,25 +528,35 @@ fun ReportsAndAnalyticsScreen(
           )
         }
       }
+      Spacer(modifier = Modifier.height(6.dp))
+      LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(periodFilters) { p ->
+          FilterChip(
+            selected = selectedPeriod == p,
+            onClick = { selectedPeriod = p },
+            label = { Text(p) },
+          )
+        }
+      }
     }
 
     item {
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Button(
           onClick = {
-            val file = ExportAndPdfUtil.generateReportPdf(context, selectedReport, headers, rows, settings)
-            ExportAndPdfUtil.shareFile(context, file, "application/pdf", "Export $selectedReport PDF")
+            val file = ExportAndPdfUtil.generateReportPdf(context, "$selectedReport ($selectedPeriod)", headers, rows, settings)
+            ExportAndPdfUtil.shareFile(context, file, "application/pdf", "Print / Share $selectedReport PDF")
           },
           modifier = Modifier.weight(1f).testTag("export_pdf_button"),
         ) {
           Icon(Icons.Filled.PictureAsPdf, contentDescription = null)
           Spacer(modifier = Modifier.width(6.dp))
-          Text("Export PDF")
+          Text("Print / PDF")
         }
         OutlinedButton(
           onClick = {
-            val file = ExportAndPdfUtil.generateCsvReport(context, selectedReport, headers, rows)
-            ExportAndPdfUtil.shareFile(context, file, "text/csv", "Export $selectedReport Excel/CSV")
+            val file = ExportAndPdfUtil.generateCsvReport(context, "${selectedReport}_$selectedPeriod", headers, rows)
+            ExportAndPdfUtil.shareFile(context, file, "text/csv", "Download $selectedReport Excel/CSV")
           },
           modifier = Modifier.weight(1f).testTag("export_csv_button"),
         ) {

@@ -1,8 +1,5 @@
 package com.example.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -25,13 +22,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -42,7 +41,6 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
@@ -50,6 +48,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -70,7 +69,9 @@ import com.example.data.model.Enrollment
 import com.example.data.model.InstitutionSettings
 import com.example.data.model.JyCatalogDefaults
 import com.example.data.model.Payment
+import com.example.data.model.UserProfile
 import com.example.ui.components.EmptyStateCard
+import com.example.ui.components.OfficialOpayBankCard
 import com.example.ui.components.StatusPill
 import com.example.ui.theme.JyCrimson
 import com.example.ui.theme.JyCrimsonContainer
@@ -81,19 +82,22 @@ import com.example.ui.theme.JyGoldContainer
 import com.example.util.ExportAndPdfUtil
 import com.example.util.ImageCompressionUtil
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PaymentScreen(
+  profile: UserProfile?,
   settings: InstitutionSettings,
   enrollments: List<Enrollment>,
   payments: List<Payment>,
   activeRole: String,
   isBusy: Boolean,
   onSubmitOnlinePayment: (Enrollment, Long) -> Unit,
-  onSubmitOpayTransfer: (Enrollment, Long, String, String, String) -> Unit,
+  onSubmitOpayTransfer: (Enrollment, Long, String, String, String, String) -> Unit,
+  onAdminRecordPayment: (Enrollment, Long, String, String, String, String) -> Unit,
   onAdminReviewPayment: (Payment, Boolean, String) -> Unit,
   onNotify: (String) -> Unit,
 ) {
@@ -101,7 +105,7 @@ fun PaymentScreen(
   val scope = rememberCoroutineScope()
   val isAdmin = activeRole == "admin"
 
-  var selectedTab by remember { mutableIntStateOf(if (isAdmin) 2 else 0) }
+  var selectedTab by remember { mutableIntStateOf(if (isAdmin) 2 else 1) }
   var selectedEnrollment by remember(enrollments) { mutableStateOf(enrollments.firstOrNull()) }
   var enrDropdownExpanded by remember { mutableStateOf(false) }
 
@@ -111,22 +115,39 @@ fun PaymentScreen(
         .toString()
     )
   }
+  val todayStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
+  var paymentDate by remember { mutableStateOf(todayStr) }
   var opayRef by remember { mutableStateOf("") }
-  var senderName by remember { mutableStateOf("") }
+  var senderName by remember(profile) { mutableStateOf(profile?.fullName ?: "") }
   var evidenceBase64 by remember { mutableStateOf("") }
+  var adminSearchQuery by remember { mutableStateOf("") }
+  var showRecordPaymentDialog by remember { mutableStateOf(false) }
 
   val evidencePicker =
     rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
       if (uri != null) {
         scope.launch {
-          val encoded = ImageCompressionUtil.compressUriToBase64(context, uri, maxDimension = 540, quality = 70)
-          if (encoded != null) {
-            evidenceBase64 = encoded
-            onNotify("Payment receipt attached.")
+          val res = ImageCompressionUtil.validateAndCompressUri(context, uri, maxDimension = 540, quality = 70)
+          if (res.base64 != null) {
+            evidenceBase64 = res.base64
+            onNotify("Payment evidence attached.")
+          } else {
+            onNotify(res.errorMessage ?: "Invalid receipt file.")
           }
         }
       }
     }
+
+  if (showRecordPaymentDialog && enrollments.isNotEmpty()) {
+    AdminRecordPaymentDialog(
+      enrollments = enrollments,
+      onDismiss = { showRecordPaymentDialog = false },
+      onRecord = { enr, amt, method, ref, date, remarks ->
+        onAdminRecordPayment(enr, amt, method, ref, date, remarks)
+        showRecordPaymentDialog = false
+      },
+    )
+  }
 
   Column(modifier = Modifier.fillMaxSize()) {
     TabRow(selectedTabIndex = selectedTab) {
@@ -145,7 +166,12 @@ fun PaymentScreen(
         Tab(
           selected = selectedTab == 2,
           onClick = { selectedTab = 2 },
-          text = { Text("Review ($pendingCount)") },
+          text = { Text("Verify ($pendingCount)") },
+        )
+        Tab(
+          selected = selectedTab == 3,
+          onClick = { selectedTab = 3 },
+          text = { Text("All & Cash") },
         )
       }
     }
@@ -189,7 +215,7 @@ fun PaymentScreen(
                     color = MaterialTheme.colorScheme.primary,
                   )
                 }
-                Text("Method: ${pay.method} • Ref: ${pay.reference}", style = MaterialTheme.typography.bodySmall)
+                Text("Method: ${pay.method} • Ref: ${pay.reference} • Date: ${pay.paymentDate.ifBlank { "-" }}", style = MaterialTheme.typography.bodySmall)
                 if (pay.senderName.isNotBlank()) {
                   Text("Sender: ${pay.senderName}", style = MaterialTheme.typography.bodySmall)
                 }
@@ -198,7 +224,7 @@ fun PaymentScreen(
                     bitmap = proofBitmap.asImageBitmap(),
                     contentDescription = "Uploaded OPay payment proof",
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxWidth().height(160.dp).clip(RoundedCornerShape(12.dp)),
+                    modifier = Modifier.fillMaxWidth().height(170.dp).clip(RoundedCornerShape(12.dp)),
                   )
                 }
                 OutlinedTextField(
@@ -234,18 +260,73 @@ fun PaymentScreen(
           }
         }
       }
+    } else if (selectedTab == 3 && isAdmin) {
+      val filteredPayments =
+        remember(payments, adminSearchQuery) {
+          payments.filter { p ->
+            adminSearchQuery.isBlank() ||
+              p.studentName.contains(adminSearchQuery, ignoreCase = true) ||
+              p.studentIdNumber.contains(adminSearchQuery, ignoreCase = true) ||
+              p.reference.contains(adminSearchQuery, ignoreCase = true) ||
+              p.programmeTitle.contains(adminSearchQuery, ignoreCase = true)
+          }
+        }
+      LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        item {
+          Button(
+            onClick = { showRecordPaymentDialog = true },
+            enabled = enrollments.isNotEmpty() && !isBusy,
+            modifier = Modifier.fillMaxWidth().testTag("record_cash_payment_button"),
+          ) {
+            Icon(Icons.Filled.Add, contentDescription = null)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Record Cash / Direct OPay Payment")
+          }
+          Spacer(modifier = Modifier.height(8.dp))
+          OutlinedTextField(
+            value = adminSearchQuery,
+            onValueChange = { adminSearchQuery = it },
+            label = { Text("Search by student name, Reg No, or reference") },
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+          )
+        }
+        items(filteredPayments, key = { "adm_pay_${it.id}" }) { pay ->
+          PaymentRecordCard(pay = pay, settings = settings)
+        }
+      }
     } else {
       Column(
         modifier =
           Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
       ) {
+        OfficialOpayBankCard(settings = settings, onCopied = onNotify)
+
         if (enrollments.isEmpty()) {
           EmptyStateCard(
-            title = "No Active Course Enrollment",
-            message = "Register for a programme in Course Registration first before paying tuition.",
+            title = "No Active Course Enrolment",
+            message = "Register for a course in Course Registration first before paying tuition.",
           )
         } else {
+          if (profile != null) {
+            Card(
+              shape = RoundedCornerShape(14.dp),
+              colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              Column(modifier = Modifier.padding(12.dp)) {
+                Text("Student: ${profile.fullName}", fontWeight = FontWeight.SemiBold)
+                Text("Registration No: ${profile.studentIdNumber}", style = MaterialTheme.typography.bodySmall)
+              }
+            }
+          }
+
           ExposedDropdownMenuBox(
             expanded = enrDropdownExpanded,
             onExpandedChange = { enrDropdownExpanded = it },
@@ -255,7 +336,7 @@ fun PaymentScreen(
               value =
                 selectedEnrollment?.let {
                   "${it.programmeTitle} (Balance: ${JyCatalogDefaults.formatNaira(it.outstandingNaira)})"
-                } ?: "Select Enrollment",
+                } ?: "Select Enrolment",
               onValueChange = {},
               readOnly = true,
               label = { Text("Select Course Invoice") },
@@ -285,7 +366,7 @@ fun PaymentScreen(
           OutlinedTextField(
             value = amountInput,
             onValueChange = { amountInput = it.filter { c -> c.isDigit() } },
-            label = { Text("Amount to Pay (₦)") },
+            label = { Text("Amount Paid (₦) *") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().testTag("payment_amount_input"),
           )
@@ -303,7 +384,7 @@ fun PaymentScreen(
                   Text("Online Payment Gateway", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
                 Text(
-                  "Generates a secure transaction reference and verifies payment through the configured server endpoint (gateway secrets are never stored in this app).",
+                  "Generates a unique transaction reference and verifies payment securely with the configured server endpoint.",
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -331,39 +412,13 @@ fun PaymentScreen(
               }
             }
           } else {
-            Card(
-              shape = RoundedCornerShape(18.dp),
-              colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-              modifier = Modifier.fillMaxWidth(),
-            ) {
-              Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                  Icon(Icons.Filled.AccountBalance, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                  Spacer(modifier = Modifier.width(8.dp))
-                  Text("OPay Bank Transfer Details", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                }
-                Text("Bank: ${settings.opayBankName}", style = MaterialTheme.typography.bodyMedium)
-                Text("Account Name: ${settings.opayAccountName}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                  Text(
-                    "Account No: ${settings.opayAccountNumber}",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                  )
-                  IconButton(
-                    onClick = {
-                      val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                      cm.setPrimaryClip(ClipData.newPlainText("OPay Account", settings.opayAccountNumber))
-                      onNotify("OPay account number copied!")
-                    }
-                  ) {
-                    Icon(Icons.Filled.ContentCopy, contentDescription = "Copy OPay account number")
-                  }
-                }
-                Text(settings.opayInstructions, style = MaterialTheme.typography.bodySmall)
-              }
-            }
-
+            OutlinedTextField(
+              value = paymentDate,
+              onValueChange = { paymentDate = it },
+              label = { Text("Payment Date (YYYY-MM-DD) *") },
+              singleLine = true,
+              modifier = Modifier.fillMaxWidth().testTag("opay_date_input"),
+            )
             OutlinedTextField(
               value = senderName,
               onValueChange = { senderName = it },
@@ -374,43 +429,207 @@ fun PaymentScreen(
             OutlinedTextField(
               value = opayRef,
               onValueChange = { opayRef = it },
-              label = { Text("OPay Transaction Reference / Session ID *") },
+              label = { Text("Transaction Reference / OPay Session ID *") },
               singleLine = true,
               modifier = Modifier.fillMaxWidth().testTag("opay_reference_input"),
             )
 
-            OutlinedButton(
-              onClick = {
-                evidencePicker.launch(
-                  PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                )
-              },
-              modifier = Modifier.fillMaxWidth().testTag("upload_opay_proof_button"),
-            ) {
-              Icon(Icons.Filled.UploadFile, contentDescription = null)
-              Spacer(modifier = Modifier.width(8.dp))
-              Text(if (evidenceBase64.isBlank()) "Upload Payment Receipt Screenshot" else "Receipt Attached (Tap to Replace)")
+            val previewProof = remember(evidenceBase64) { ImageCompressionUtil.decodeBase64ToBitmap(evidenceBase64) }
+            if (previewProof != null) {
+              Image(
+                bitmap = previewProof.asImageBitmap(),
+                contentDescription = "Selected payment evidence preview",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxWidth().height(160.dp).clip(RoundedCornerShape(14.dp)),
+              )
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              OutlinedButton(
+                onClick = {
+                  evidencePicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                  )
+                },
+                modifier = Modifier.weight(1f).testTag("upload_opay_proof_button"),
+              ) {
+                Icon(Icons.Filled.UploadFile, contentDescription = null)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(if (evidenceBase64.isBlank()) "Upload Evidence (≤2MB)" else "Replace Evidence")
+              }
+              if (evidenceBase64.isNotBlank()) {
+                OutlinedButton(onClick = { evidenceBase64 = "" }) {
+                  Icon(Icons.Filled.DeleteOutline, contentDescription = "Remove evidence", tint = JyCrimson)
+                }
+              }
             }
 
             Button(
               onClick = {
                 val enr = selectedEnrollment ?: return@Button
                 val amt = amountInput.toLongOrNull() ?: 0L
-                if (amt > 0 && opayRef.trim().length >= 4 && senderName.trim().length >= 2) {
-                  onSubmitOpayTransfer(enr, amt, opayRef, senderName, evidenceBase64)
+                if (amt > 0 && opayRef.trim().length >= 4 && senderName.trim().length >= 2 && paymentDate.isNotBlank()) {
+                  onSubmitOpayTransfer(enr, amt, opayRef, paymentDate, senderName, evidenceBase64)
                   opayRef = ""
                   evidenceBase64 = ""
                 } else {
-                  onNotify("Enter valid amount, sender name, and OPay transaction reference.")
+                  onNotify("Enter valid amount, payment date, sender name, and transaction reference.")
                 }
               },
               enabled = !isBusy && selectedEnrollment != null,
               modifier = Modifier.fillMaxWidth().height(52.dp).testTag("submit_opay_button"),
             ) {
-              Text("Submit OPay Transfer for Verification")
+              Text("Submit Payment Evidence for Verification")
             }
           }
         }
+      }
+    }
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AdminRecordPaymentDialog(
+  enrollments: List<Enrollment>,
+  onDismiss: () -> Unit,
+  onRecord: (Enrollment, Long, String, String, String, String) -> Unit,
+) {
+  var selectedEnr by remember { mutableStateOf(enrollments.first()) }
+  var enrExpanded by remember { mutableStateOf(false) }
+  var amountStr by remember(selectedEnr) {
+    mutableStateOf(
+      (selectedEnr.outstandingNaira.takeIf { it > 0 } ?: selectedEnr.totalFeeNaira).toString()
+    )
+  }
+  var method by remember { mutableStateOf("cash") }
+  var ref by remember { mutableStateOf("JYC-OFF-${System.currentTimeMillis() % 100000}") }
+  var date by remember { mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())) }
+  var remarks by remember { mutableStateOf("Received at JY-Computers Finance Desk") }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("Record Cash / OPay Payment") },
+    text = {
+      Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        ExposedDropdownMenuBox(expanded = enrExpanded, onExpandedChange = { enrExpanded = it }) {
+          OutlinedTextField(
+            value = "${selectedEnr.studentName} — ${selectedEnr.programmeTitle}",
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Student Enrolment") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = enrExpanded) },
+            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+          )
+          ExposedDropdownMenu(expanded = enrExpanded, onDismissRequest = { enrExpanded = false }) {
+            enrollments.forEach { enr ->
+              DropdownMenuItem(
+                text = { Text("${enr.studentName} (${enr.studentIdNumber}) • Bal ${JyCatalogDefaults.formatNaira(enr.outstandingNaira)}") },
+                onClick = {
+                  selectedEnr = enr
+                  enrExpanded = false
+                },
+              )
+            }
+          }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          FilterChip(selected = method == "cash", onClick = { method = "cash" }, label = { Text("Cash") })
+          FilterChip(selected = method == "opay_transfer", onClick = { method = "opay_transfer" }, label = { Text("OPay Transfer") })
+        }
+        OutlinedTextField(value = amountStr, onValueChange = { amountStr = it.filter { c -> c.isDigit() } }, label = { Text("Amount (₦)") }, singleLine = true)
+        OutlinedTextField(value = ref, onValueChange = { ref = it }, label = { Text("Receipt / Reference") }, singleLine = true)
+        OutlinedTextField(value = date, onValueChange = { date = it }, label = { Text("Payment Date (YYYY-MM-DD)") }, singleLine = true)
+        OutlinedTextField(value = remarks, onValueChange = { remarks = it }, label = { Text("Remarks") })
+      }
+    },
+    confirmButton = {
+      TextButton(
+        onClick = {
+          val amt = amountStr.toLongOrNull() ?: 0L
+          if (amt > 0 && ref.trim().length >= 4) {
+            onRecord(selectedEnr, amt, method, ref, date, remarks)
+          }
+        }
+      ) { Text("Record Payment") }
+    },
+    dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+  )
+}
+
+@Composable
+private fun PaymentRecordCard(
+  pay: Payment,
+  settings: InstitutionSettings,
+) {
+  val context = LocalContext.current
+  val dateText =
+    pay.paymentDate.ifBlank {
+      pay.createdAt?.toDate()?.let {
+        SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(it)
+      } ?: "Just now"
+    }
+  val methodLabel =
+    when (pay.method) {
+      "opay_transfer" -> "OPay Transfer"
+      "cash" -> "Cash Payment"
+      else -> "Online Gateway"
+    }
+  Card(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(16.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+  ) {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(pay.programmeTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+          Text("${pay.studentName} (${pay.studentIdNumber})", style = MaterialTheme.typography.bodySmall)
+        }
+        val (bg, fg) =
+          when (pay.status) {
+            "approved" -> JyEmeraldContainer to JyEmerald
+            "rejected" -> JyCrimsonContainer to JyCrimson
+            else -> JyGoldContainer to JyGold
+          }
+        StatusPill(pay.status.uppercase(), bg, fg)
+      }
+      Text(
+        "${JyCatalogDefaults.formatNaira(pay.amountNaira)} • Ref: ${pay.reference}",
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.SemiBold,
+      )
+      Text(
+        "$methodLabel • $dateText",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      if (pay.adminRemarks.isNotBlank()) {
+        Text("Note: ${pay.adminRemarks}", style = MaterialTheme.typography.bodySmall)
+      }
+      OutlinedButton(
+        onClick = {
+          val pdfFile = ExportAndPdfUtil.generatePaymentReceiptPdf(context, pay, settings)
+          ExportAndPdfUtil.shareFile(
+            context,
+            pdfFile,
+            "application/pdf",
+            "Print / Share Tuition Receipt",
+          )
+        },
+        modifier = Modifier.testTag("download_receipt_${pay.id}"),
+      ) {
+        Icon(Icons.Filled.Download, contentDescription = null)
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Print / Share PDF Receipt")
       }
     }
   }
@@ -421,7 +640,6 @@ fun PaymentHistoryScreen(
   payments: List<Payment>,
   settings: InstitutionSettings,
 ) {
-  val context = LocalContext.current
   var filterStatus by remember { mutableStateOf("all") }
 
   val filtered =
@@ -455,62 +673,7 @@ fun PaymentHistoryScreen(
       }
     } else {
       items(filtered, key = { it.id }) { pay ->
-        val dateText =
-          pay.createdAt?.toDate()?.let {
-            SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(it)
-          } ?: "Just now"
-        Card(
-          modifier = Modifier.fillMaxWidth(),
-          shape = RoundedCornerShape(16.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        ) {
-          Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              Text(pay.programmeTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-              val (bg, fg) =
-                when (pay.status) {
-                  "approved" -> JyEmeraldContainer to JyEmerald
-                  "rejected" -> JyCrimsonContainer to JyCrimson
-                  else -> JyGoldContainer to JyGold
-                }
-              StatusPill(pay.status.uppercase(), bg, fg)
-            }
-            Text(
-              "${JyCatalogDefaults.formatNaira(pay.amountNaira)} • Ref: ${pay.reference}",
-              style = MaterialTheme.typography.titleSmall,
-              color = MaterialTheme.colorScheme.primary,
-              fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-              "${if (pay.method == "opay_transfer") "OPay Transfer" else "Online Gateway"} • $dateText",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (pay.adminRemarks.isNotBlank()) {
-              Text("Note: ${pay.adminRemarks}", style = MaterialTheme.typography.bodySmall)
-            }
-            OutlinedButton(
-              onClick = {
-                val pdfFile = ExportAndPdfUtil.generatePaymentReceiptPdf(context, pay, settings)
-                ExportAndPdfUtil.shareFile(
-                  context,
-                  pdfFile,
-                  "application/pdf",
-                  "Share Tuition Receipt",
-                )
-              },
-              modifier = Modifier.testTag("download_receipt_${pay.id}"),
-            ) {
-              Icon(Icons.Filled.Download, contentDescription = null)
-              Spacer(modifier = Modifier.width(6.dp))
-              Text("Download / Share PDF Receipt")
-            }
-          }
-        }
+        PaymentRecordCard(pay = pay, settings = settings)
       }
     }
   }

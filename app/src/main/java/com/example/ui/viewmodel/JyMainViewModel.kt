@@ -4,8 +4,8 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.AcademicResult
+import com.example.data.model.ActivityLog
 import com.example.data.model.Announcement
-import com.example.data.model.AppNotification
 import com.example.data.model.AttendanceRecord
 import com.example.data.model.Certificate
 import com.example.data.model.Enrollment
@@ -29,7 +29,6 @@ import java.util.Locale
 import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -174,6 +173,14 @@ class JyMainViewModel(
       .catch { error -> handleStreamError("instructors", error) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), emptyList())
 
+  val activityLogsAdmin: StateFlow<List<ActivityLog>> =
+    _isAdminVerified
+      .flatMapLatest { isAdmin ->
+        if (isAdmin) profileRepo.observeActivityLogsAdmin() else flowOf(emptyList())
+      }
+      .catch { error -> handleStreamError("activityLogs", error) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), emptyList())
+
   val learningMaterials: StateFlow<List<LearningMaterial>> =
     academicRepo
       .observeLearningMaterials()
@@ -194,10 +201,17 @@ class JyMainViewModel(
     _feedbackMessage.value = msg
   }
 
-  fun generateStudentId(): String {
+  private fun actorDisplayName(): String =
+    (userProfileState.value as? UiState.Success)?.data?.fullName?.ifBlank { currentUserDisplayName }
+      ?: currentUserDisplayName
+
+  private suspend fun generateUniqueStudentId(): String {
     val year = SimpleDateFormat("yyyy", Locale.getDefault()).format(Date())
-    val num = Random.nextInt(1000, 9999)
-    return "JYC-$year-$num"
+    repeat(6) {
+      val candidate = "JYC-$year-${Random.nextInt(1000, 9999)}"
+      if (!profileRepo.isStudentIdTaken(candidate)) return candidate
+    }
+    return "JYC-$year-${(System.currentTimeMillis() % 9000 + 1000)}"
   }
 
   fun registerStudent(
@@ -208,22 +222,26 @@ class JyMainViewModel(
     email: String,
     residentialAddress: String,
     stateOfOrigin: String,
+    localGovernmentArea: String,
     nextOfKin: String,
     nextOfKinPhone: String,
     passportPhotoBase64: String,
     programme: Programme,
+    trainingLevel: String,
     targetUid: String? = null,
     onSuccess: () -> Unit = {},
   ) {
     viewModelScope.launch {
       _actionBusy.value = true
-      val studentId = generateStudentId()
+      val studentId = generateUniqueStudentId()
       val regDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
       val uid = targetUid ?: currentUserId
       val role =
         if (targetUid == null && _isAdminVerified.value) "admin"
         else if (targetUid == null && _isInstructorVerified.value) "instructor"
         else "student"
+      val initialApproval =
+        if (_isAdminVerified.value) "approved" else "pending"
 
       val profile =
         UserProfile(
@@ -237,12 +255,17 @@ class JyMainViewModel(
           email = email,
           residentialAddress = residentialAddress,
           stateOfOrigin = stateOfOrigin,
+          localGovernmentArea = localGovernmentArea,
           nextOfKin = nextOfKin,
           nextOfKinPhone = nextOfKinPhone,
           passportPhotoBase64 = passportPhotoBase64,
           selectedProgrammeId = programme.id,
           selectedProgrammeTitle = programme.title,
+          trainingLevel = trainingLevel,
           registrationDate = regDate,
+          approvalStatus = initialApproval,
+          paymentStatus = "unpaid",
+          courseProgressPercent = 0,
           status = "active",
         )
 
@@ -257,7 +280,15 @@ class JyMainViewModel(
             session = institutionSettings.value.activeSession,
           )
         }
-        _feedbackMessage.value = "Registration completed! Student ID: $studentId"
+        if (_isAdminVerified.value) {
+          profileRepo.logAdminActivity(
+            actorName = actorDisplayName(),
+            action = "REGISTER_STUDENT",
+            targetId = uid,
+            details = "Registered $fullName ($studentId) for ${programme.title}",
+          )
+        }
+        _feedbackMessage.value = "Registration completed! Reg No: $studentId"
         onSuccess()
       } else {
         _feedbackMessage.value =
@@ -282,10 +313,106 @@ class JyMainViewModel(
     }
   }
 
-  fun updateStudentStatusAdmin(targetUid: String, status: String) {
+  fun editStudentAdmin(updated: UserProfile, onSuccess: () -> Unit = {}) {
     viewModelScope.launch {
       _actionBusy.value = true
-      val res = profileRepo.adminUpdateStudentStatus(targetUid, status)
+      val res = profileRepo.adminEditStudentProfile(updated, actorName = actorDisplayName())
+      _feedbackMessage.value =
+        if (res.isSuccess) {
+          onSuccess()
+          "Updated ${updated.fullName}'s student record."
+        } else {
+          "Failed to update student: ${res.exceptionOrNull()?.localizedMessage}"
+        }
+      _actionBusy.value = false
+    }
+  }
+
+  fun approveOrRejectStudentAdmin(targetUid: String, studentName: String, approvalStatus: String) {
+    viewModelScope.launch {
+      _actionBusy.value = true
+      val res =
+        profileRepo.adminUpdateApprovalStatus(
+          targetUid = targetUid,
+          studentName = studentName,
+          approvalStatus = approvalStatus,
+          actorName = actorDisplayName(),
+        )
+      _feedbackMessage.value =
+        if (res.isSuccess) "$studentName registration marked ${approvalStatus.uppercase()}."
+        else "Approval update failed: ${res.exceptionOrNull()?.localizedMessage}"
+      _actionBusy.value = false
+    }
+  }
+
+  fun updateStudentProgressAdmin(
+    targetUid: String,
+    studentName: String,
+    progressPercent: Int,
+    statusOverride: String? = null,
+  ) {
+    viewModelScope.launch {
+      _actionBusy.value = true
+      val res =
+        profileRepo.adminUpdateStudentProgress(
+          targetUid = targetUid,
+          studentName = studentName,
+          progressPercent = progressPercent,
+          statusOverride = statusOverride,
+          actorName = actorDisplayName(),
+        )
+      _feedbackMessage.value =
+        if (res.isSuccess) "Course progress for $studentName updated to ${progressPercent.coerceIn(0, 100)}%."
+        else "Progress update failed: ${res.exceptionOrNull()?.localizedMessage}"
+      _actionBusy.value = false
+    }
+  }
+
+  fun assignStudentToCourseAdmin(student: UserProfile, programme: Programme, onDone: () -> Unit = {}) {
+    viewModelScope.launch {
+      _actionBusy.value = true
+      val enrRes =
+        academicRepo.registerCourseEnrollment(
+          studentUid = student.userId,
+          studentName = student.fullName,
+          studentIdNumber = student.studentIdNumber,
+          programme = programme,
+          session = institutionSettings.value.activeSession,
+        )
+      if (enrRes.isSuccess) {
+        profileRepo.adminEditStudentProfile(
+          student.copy(
+            selectedProgrammeId = programme.id,
+            selectedProgrammeTitle = programme.title,
+          ),
+          actorName = actorDisplayName(),
+        )
+        profileRepo.logAdminActivity(
+          actorName = actorDisplayName(),
+          action = "ASSIGN_COURSE",
+          targetId = student.userId,
+          details = "Assigned ${student.fullName} to ${programme.title}",
+        )
+        _feedbackMessage.value = "Assigned ${student.fullName} to ${programme.title}."
+        onDone()
+      } else {
+        _feedbackMessage.value =
+          "Course assignment failed: ${enrRes.exceptionOrNull()?.localizedMessage}"
+      }
+      _actionBusy.value = false
+    }
+  }
+
+  fun updateStudentStatusAdmin(targetUid: String, status: String, studentName: String = "") {
+    viewModelScope.launch {
+      _actionBusy.value = true
+      val res =
+        profileRepo.adminUpdateStudentStatus(
+          targetUid = targetUid,
+          newStatus = status,
+          studentName = studentName,
+          actorName = actorDisplayName(),
+        )
       _feedbackMessage.value =
         if (res.isSuccess) "Account status updated to $status."
         else "Failed to update status: ${res.exceptionOrNull()?.localizedMessage}"
@@ -293,10 +420,15 @@ class JyMainViewModel(
     }
   }
 
-  fun deleteStudentAdmin(targetUid: String) {
+  fun deleteStudentAdmin(targetUid: String, studentName: String = "") {
     viewModelScope.launch {
       _actionBusy.value = true
-      val res = profileRepo.adminDeleteStudent(targetUid)
+      val res =
+        profileRepo.adminDeleteStudent(
+          targetUid = targetUid,
+          studentName = studentName,
+          actorName = actorDisplayName(),
+        )
       _feedbackMessage.value =
         if (res.isSuccess) "Student record deleted."
         else "Delete failed: ${res.exceptionOrNull()?.localizedMessage}"
@@ -322,6 +454,7 @@ class JyMainViewModel(
           role = role,
           specialization = specialization,
           assignedCourseIds = assignedCourseIds,
+          actorName = actorDisplayName(),
         )
       _feedbackMessage.value =
         if (res.isSuccess) "Updated role for $fullName to ${role.uppercase()}."
@@ -334,13 +467,41 @@ class JyMainViewModel(
     viewModelScope.launch {
       _actionBusy.value = true
       val res = academicRepo.saveProgramme(programme)
+      if (res.isSuccess && _isAdminVerified.value) {
+        profileRepo.logAdminActivity(
+          actorName = actorDisplayName(),
+          action = "SAVE_COURSE",
+          targetId = res.getOrDefault(programme.id),
+          details = "Saved course '${programme.title}' (${JyCatalogDefaults.formatNaira(programme.feeNaira)})",
+        )
+      }
       _feedbackMessage.value =
         if (res.isSuccess) {
           onDone()
-          "Programme '${programme.title}' saved."
+          "Course '${programme.title}' saved."
         } else {
-          "Failed to save programme: ${res.exceptionOrNull()?.localizedMessage}"
+          "Failed to save course: ${res.exceptionOrNull()?.localizedMessage}"
         }
+      _actionBusy.value = false
+    }
+  }
+
+  fun toggleProgrammeActiveAdmin(programme: Programme) {
+    viewModelScope.launch {
+      _actionBusy.value = true
+      val next = !programme.active
+      val res = academicRepo.toggleProgrammeActive(programme.id, next)
+      if (res.isSuccess) {
+        profileRepo.logAdminActivity(
+          actorName = actorDisplayName(),
+          action = "TOGGLE_COURSE",
+          targetId = programme.id,
+          details = "Set '${programme.title}' availability to ${if (next) "AVAILABLE" else "DISABLED"}",
+        )
+      }
+      _feedbackMessage.value =
+        if (res.isSuccess) "${programme.title} marked ${if (next) "Available" else "Unavailable"}."
+        else "Update failed: ${res.exceptionOrNull()?.localizedMessage}"
       _actionBusy.value = false
     }
   }
@@ -349,9 +510,17 @@ class JyMainViewModel(
     viewModelScope.launch {
       _actionBusy.value = true
       val res = academicRepo.deleteProgramme(programmeId)
+      if (res.isSuccess && _isAdminVerified.value) {
+        profileRepo.logAdminActivity(
+          actorName = actorDisplayName(),
+          action = "DELETE_COURSE",
+          targetId = programmeId,
+          details = "Deleted course $programmeId",
+        )
+      }
       _feedbackMessage.value =
-        if (res.isSuccess) "Programme removed."
-        else "Failed to delete programme: ${res.exceptionOrNull()?.localizedMessage}"
+        if (res.isSuccess) "Course removed."
+        else "Failed to delete course: ${res.exceptionOrNull()?.localizedMessage}"
       _actionBusy.value = false
     }
   }
@@ -383,10 +552,22 @@ class JyMainViewModel(
     }
   }
 
+  fun updateEnrollmentStatusAdmin(enrollmentId: String, status: String) {
+    viewModelScope.launch {
+      _actionBusy.value = true
+      val res = academicRepo.updateEnrollmentStatus(enrollmentId, status)
+      _feedbackMessage.value =
+        if (res.isSuccess) "Enrolment status updated to ${status.uppercase()}."
+        else "Update failed: ${res.exceptionOrNull()?.localizedMessage}"
+      _actionBusy.value = false
+    }
+  }
+
   fun submitManualOpayPayment(
     enrollment: Enrollment,
     amountNaira: Long,
     reference: String,
+    paymentDate: String,
     senderName: String,
     evidenceBase64: String,
     onDone: () -> Unit = {},
@@ -405,6 +586,7 @@ class JyMainViewModel(
           amountNaira = amountNaira,
           method = "opay_transfer",
           reference = reference,
+          paymentDate = paymentDate,
           senderName = senderName,
           evidenceBase64 = evidenceBase64,
         )
@@ -428,6 +610,7 @@ class JyMainViewModel(
     val name = profile?.fullName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
     val studentId = profile?.studentIdNumber?.ifBlank { "JYC-PENDING" } ?: "JYC-PENDING"
     val ref = PaymentGatewayClient.generateTransactionReference()
+    val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
     viewModelScope.launch {
       _actionBusy.value = true
       val res =
@@ -439,6 +622,7 @@ class JyMainViewModel(
           amountNaira = amountNaira,
           method = "online_gateway",
           reference = ref,
+          paymentDate = today,
           senderName = name,
           evidenceBase64 = "",
         )
@@ -461,10 +645,42 @@ class JyMainViewModel(
     }
   }
 
+  fun recordAdminPayment(
+    enrollment: Enrollment,
+    amountNaira: Long,
+    method: String,
+    reference: String,
+    paymentDate: String,
+    remarks: String,
+    onDone: () -> Unit = {},
+  ) {
+    viewModelScope.launch {
+      _actionBusy.value = true
+      val res =
+        financeRepo.recordAdminPayment(
+          enrollment = enrollment,
+          amountNaira = amountNaira,
+          method = method,
+          reference = reference,
+          paymentDate = paymentDate,
+          remarks = remarks,
+          actorName = actorDisplayName(),
+        )
+      _feedbackMessage.value =
+        if (res.isSuccess) {
+          onDone()
+          "Recorded ${JyCatalogDefaults.formatNaira(amountNaira)} payment for ${enrollment.studentName}."
+        } else {
+          "Failed to record payment: ${res.exceptionOrNull()?.localizedMessage}"
+        }
+      _actionBusy.value = false
+    }
+  }
+
   fun reviewPaymentAdmin(payment: Payment, approve: Boolean, remarks: String) {
     viewModelScope.launch {
       _actionBusy.value = true
-      val res = financeRepo.adminReviewPayment(payment, approve, remarks)
+      val res = financeRepo.adminReviewPayment(payment, approve, remarks, actorName = actorDisplayName())
       _feedbackMessage.value =
         if (res.isSuccess) {
           if (approve) "Payment ${payment.reference} approved & student ledger updated."
@@ -566,6 +782,14 @@ class JyMainViewModel(
           signatoryName = settings.signatoryName,
           signatoryTitle = settings.signatoryTitle,
         )
+      if (res.isSuccess && _isAdminVerified.value) {
+        profileRepo.logAdminActivity(
+          actorName = actorDisplayName(),
+          action = "ISSUE_CERTIFICATE",
+          targetId = res.getOrDefault(""),
+          details = "Issued certificate for $studentName ($programmeTitle)",
+        )
+      }
       _feedbackMessage.value =
         if (res.isSuccess) {
           onDone()
@@ -612,6 +836,14 @@ class JyMainViewModel(
     viewModelScope.launch {
       _actionBusy.value = true
       val res = profileRepo.saveInstitutionSettings(settings)
+      if (res.isSuccess && _isAdminVerified.value) {
+        profileRepo.logAdminActivity(
+          actorName = actorDisplayName(),
+          action = "SAVE_SETTINGS",
+          targetId = "institution",
+          details = "Updated institution & payment settings",
+        )
+      }
       _feedbackMessage.value =
         if (res.isSuccess) "Administrative settings saved."
         else "Failed to save settings: ${res.exceptionOrNull()?.localizedMessage}"
