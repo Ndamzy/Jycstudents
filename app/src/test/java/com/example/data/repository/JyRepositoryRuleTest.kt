@@ -2,6 +2,9 @@ package com.example.data.repository
 
 import com.example.base.FirestoreEmulatorTestBase
 import com.example.data.model.Enrollment
+import com.example.data.model.JyCatalogDefaults
+import com.example.data.model.JyServiceItem
+import com.example.data.model.Payment
 import com.example.data.model.Programme
 import com.example.data.model.UserProfile
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -11,6 +14,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -82,6 +86,7 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
     val enrollmentId = enrollResult.getOrThrow()
 
     val financeRepo = FinanceRepository(firestore)
+    val ref1 = "OPAY-${UUID.randomUUID().toString().take(8)}"
     val payResult =
       withTimeout(DEFAULT_TIMEOUT_MS) {
         financeRepo.submitPayment(
@@ -96,13 +101,36 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
             ),
           amountNaira = 200_000L,
           method = "opay_transfer",
-          reference = "OPAY-${UUID.randomUUID().toString().take(8)}",
+          reference = ref1,
           paymentDate = "2026-11-13",
           senderName = "Alice Student",
           evidenceBase64 = "",
         )
       }
     assertTrue(payResult.isSuccess)
+
+    // Submitting the same reference again must be blocked
+    val dupResult =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        financeRepo.submitPayment(
+          studentUid = uid,
+          studentName = "Alice Student",
+          studentIdNumber = "JYC-2026-9901",
+          enrollment =
+            Enrollment(
+              id = enrollmentId,
+              programmeId = programme.id,
+              programmeTitle = programme.title,
+            ),
+          amountNaira = 200_000L,
+          method = "opay_transfer",
+          reference = ref1.lowercase(),
+          paymentDate = "2026-11-13",
+          senderName = "Alice Student",
+          evidenceBase64 = "",
+        )
+      }
+    assertTrue("Duplicate reference should fail on client check", dupResult.isFailure)
 
     var cashDenied = false
     try {
@@ -126,6 +154,110 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
       cashDenied = e.unwrapFirestoreException()?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
     }
     assertTrue("Students must not create cash payments directly", cashDenied)
+  }
+
+  @Test
+  fun universalServiceRequestAndAdminApproval_preventsDuplicateRefsAndUpdatesRequest() = runBlocking {
+    val studentUid = signInTestUser("service_customer_${UUID.randomUUID()}@test.com")
+    val financeRepo = FinanceRepository(firestore)
+
+    val nyscSeed = JyCatalogDefaults.DEFAULT_SERVICES.first { it.id == "srv_nysc_registration_assistance" }
+    val nyscService =
+      JyServiceItem(
+        id = nyscSeed.id,
+        title = nyscSeed.title,
+        category = nyscSeed.category,
+        description = nyscSeed.description,
+        defaultFeeNaira = nyscSeed.defaultFeeNaira,
+        paymentEnabled = nyscSeed.paymentEnabled,
+        allowPartialPayment = nyscSeed.allowPartialPayment,
+      )
+
+    // Non-admin cannot save service catalog entries
+    val nonAdminSave = withTimeout(DEFAULT_TIMEOUT_MS) { financeRepo.saveService(nyscService) }
+    assertTrue("Non-admin saving service must be denied", nonAdminSave.isFailure)
+
+    // Customer creates a service request
+    val reqRes =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        financeRepo.createServiceRequest(
+          customerUid = studentUid,
+          customerName = "Chinedu Okafor",
+          customerPhone = JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE,
+          customerEmail = "chinedu@test.com",
+          customerRegNumber = "JYC-2026-8811",
+          service = nyscService,
+          details = "NYSC Green Card & Mobilization assistance",
+        )
+      }
+    assertTrue(reqRes.isSuccess)
+    val serviceRequest = reqRes.getOrThrow()
+    assertEquals("unpaid", serviceRequest.paymentStatus)
+    assertTrue(serviceRequest.invoiceNumber.startsWith("INV-"))
+
+    // Customer submits bank_transfer payment for the service request (status must stay pending)
+    val refCode = "ACCESS-${UUID.randomUUID().toString().take(8)}"
+    val transferRes =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        financeRepo.submitUniversalPayment(
+          customerUid = studentUid,
+          customerName = "Chinedu Okafor",
+          customerIdNumber = "JYC-2026-8811",
+          enrollment = null,
+          serviceRequest = serviceRequest,
+          amountNaira = nyscService.defaultFeeNaira,
+          method = "bank_transfer",
+          reference = refCode,
+          paymentDate = "2026-11-14",
+          senderName = "Chinedu Okafor",
+          senderBank = "Access Bank",
+          evidenceBase64 = "",
+        )
+      }
+    assertTrue(transferRes.isSuccess)
+    val paymentId = transferRes.getOrThrow()
+
+    // Admin reviews & approves the payment
+    val adminUid = signInVerifiedAdminUser()
+    val adminServiceSave = withTimeout(DEFAULT_TIMEOUT_MS) { financeRepo.saveService(nyscService) }
+    assertTrue("Admin saving service failed: ${adminServiceSave.exceptionOrNull()}", adminServiceSave.isSuccess)
+
+    val paymentSnap = withTimeout(DEFAULT_TIMEOUT_MS) { firestore.collection("payments").document(paymentId).get().await() }
+    val loadedPayment = paymentSnap.toObject(Payment::class.java)!!
+    assertEquals("pending", loadedPayment.status)
+
+    val approveRes =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        financeRepo.adminReviewPayment(
+          payment = loadedPayment,
+          approve = true,
+          adminRemarks = "Verified on OPay business ledger",
+          actorName = "Dr. Joshua Dangana",
+        )
+      }
+    assertTrue("Admin approval failed: ${approveRes.exceptionOrNull()}", approveRes.isSuccess)
+
+    // Verify service_request updated atomically to paid + in_progress
+    val updatedReqSnap =
+      withTimeout(DEFAULT_TIMEOUT_MS) { firestore.collection("service_requests").document(serviceRequest.id).get().await() }
+    assertEquals("paid", updatedReqSnap.getString("paymentStatus"))
+    assertEquals("in_progress", updatedReqSnap.getString("status"))
+    assertEquals(nyscService.defaultFeeNaira, updatedReqSnap.getLong("amountPaidNaira"))
+
+    // Verify payment_references registry blocks second payment with identical reference
+    val dupAdminRecord =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        financeRepo.recordAdminPayment(
+          serviceRequest = serviceRequest,
+          amountNaira = 2000L,
+          method = "opay_transfer",
+          reference = refCode.lowercase(),
+          paymentDate = "2026-11-14",
+          remarks = "Duplicate attempt",
+          actorName = "Admin ($adminUid)",
+        )
+      }
+    assertFalse("Second admin payment with duplicate reference must fail", dupAdminRecord.isSuccess)
   }
 
   @Test

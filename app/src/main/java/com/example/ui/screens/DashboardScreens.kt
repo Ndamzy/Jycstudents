@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.AssistChip
@@ -43,7 +44,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -64,11 +64,14 @@ import com.example.data.model.InstitutionSettings
 import com.example.data.model.JyCatalogDefaults
 import com.example.data.model.Payment
 import com.example.data.model.Programme
+import com.example.data.model.ServiceRequest
 import com.example.data.model.UserProfile
 import com.example.ui.components.Base64Avatar
 import com.example.ui.components.EmptyStateCard
+import com.example.ui.components.JyBusinessFooter
 import com.example.ui.components.JyGradientHeaderCard
 import com.example.ui.components.MetricStatCard
+import com.example.ui.components.OfficialContactCard
 import com.example.ui.components.OfficialOpayBankCard
 import com.example.ui.components.SectionHeader
 import com.example.ui.components.SimpleDistributionChartCard
@@ -91,19 +94,22 @@ fun StudentDashboardScreen(
   profile: UserProfile?,
   settings: InstitutionSettings,
   enrollments: List<Enrollment>,
+  serviceRequests: List<ServiceRequest> = emptyList(),
   payments: List<Payment>,
   attendance: List<AttendanceRecord>,
   results: List<AcademicResult>,
   certificates: List<Certificate>,
   announcements: List<Announcement>,
   programmes: List<Programme>,
+  onPayEnrollment: (Enrollment) -> Unit = {},
+  onPayServiceRequest: (ServiceRequest) -> Unit = {},
   onNotify: (String) -> Unit,
   onNavigate: (String) -> Unit,
 ) {
   val context = LocalContext.current
-  val totalPaid = enrollments.sumOf { it.amountPaidNaira }
-  val totalFee = enrollments.sumOf { it.totalFeeNaira }
-  val totalOutstanding = enrollments.sumOf { it.outstandingNaira }
+  val totalPaid = enrollments.sumOf { it.amountPaidNaira } + serviceRequests.sumOf { it.amountPaidNaira }
+  val totalFee = enrollments.sumOf { it.totalFeeNaira } + serviceRequests.sumOf { it.totalFeeNaira }
+  val totalOutstanding = enrollments.sumOf { it.outstandingNaira } + serviceRequests.sumOf { it.outstandingNaira }
   val presentCount = attendance.count { it.status == "present" || it.status == "late" }
   val attendancePct =
     if (attendance.isEmpty()) 100 else ((presentCount * 100f) / attendance.size).toInt()
@@ -258,14 +264,48 @@ fun StudentDashboardScreen(
     }
 
     item {
-      OfficialOpayBankCard(settings = settings, onCopied = onNotify)
+      OfficialOpayBankCard(
+        settings = settings,
+        onCopied = onNotify,
+        amountPayableNaira = totalOutstanding.takeIf { it > 0L },
+        showLaunchBankButton = true,
+      )
+    }
+
+    val firstUnpaidReq = serviceRequests.firstOrNull { it.outstandingNaira > 0L }
+    val firstUnpaidEnr = enrollments.firstOrNull { it.outstandingNaira > 0L }
+    if ((firstUnpaidReq != null || firstUnpaidEnr != null) && settings.paymentsEnabled) {
+      item {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+          Button(
+            onClick = {
+              if (firstUnpaidReq != null) onPayServiceRequest(firstUnpaidReq)
+              else if (firstUnpaidEnr != null) onPayEnrollment(firstUnpaidEnr)
+            },
+            modifier = Modifier.weight(1f).testTag("student_dashboard_pay_now"),
+          ) {
+            Icon(Icons.Filled.Payments, contentDescription = null)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Pay Now")
+          }
+          OutlinedButton(
+            onClick = { onNavigate("services") },
+            modifier = Modifier.weight(1f).testTag("student_dashboard_services_button"),
+          ) {
+            Icon(Icons.Filled.Storefront, contentDescription = null)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("All Services")
+          }
+        }
+      }
     }
 
     item {
       SectionHeader("Quick Actions")
       val actions =
         listOf(
-          Triple("Pay Tuition", Icons.Filled.Payments, "payments"),
+          Triple("All Services", Icons.Filled.Storefront, "services"),
+          Triple("Pay & Checkout", Icons.Filled.Payments, "payments"),
           Triple("Payment History", Icons.Filled.History, "payment_history"),
           Triple("Courses", Icons.Filled.School, "course_catalogue"),
           Triple("Results (${results.size})", Icons.Filled.Grade, "results"),
@@ -347,6 +387,9 @@ fun StudentDashboardScreen(
         AnnouncementSummaryCard(item)
       }
     }
+    item {
+      OfficialContactCard(settings = settings, onNotify = onNotify)
+    }
   }
 }
 
@@ -356,11 +399,13 @@ fun AdminDashboardScreen(
   allUsers: List<UserProfile>,
   programmes: List<Programme>,
   enrollments: List<Enrollment>,
+  serviceRequests: List<ServiceRequest> = emptyList(),
   payments: List<Payment>,
   announcements: List<Announcement>,
   activityLogs: List<ActivityLog>,
   onApproveStudent: (String, String, String) -> Unit,
   onOpenAddStudent: () -> Unit,
+  onNotify: (String) -> Unit = {},
   onNavigate: (String) -> Unit,
 ) {
   val students = remember(allUsers) { allUsers.filter { it.role == "student" || it.studentIdNumber.isNotBlank() } }
@@ -370,7 +415,7 @@ fun AdminDashboardScreen(
   val approvedRegCount = students.count { it.approvalStatus == "approved" }
   val completedPaymentsTotal = payments.filter { it.status == "approved" }.sumOf { it.amountNaira }
   val pendingPaymentsCount = payments.count { it.status == "pending" }
-  val outstandingTotal = enrollments.sumOf { it.outstandingNaira }
+  val outstandingTotal = enrollments.sumOf { it.outstandingNaira } + serviceRequests.sumOf { it.outstandingNaira }
 
   LazyColumn(
     modifier = Modifier.fillMaxSize().testTag("admin_dashboard_list"),
@@ -494,6 +539,7 @@ fun AdminDashboardScreen(
         listOf(
           Triple("Manage Students", Icons.Filled.Group, "admin_students"),
           Triple("Register Student", Icons.Filled.PersonAdd, "add_student"),
+          Triple("Services & Invoices", Icons.Filled.Storefront, "services"),
           Triple("Courses", Icons.Filled.MenuBook, "course_catalogue"),
           Triple("Payments", Icons.Filled.Payments, "payments"),
           Triple("Reports & Export", Icons.Filled.Analytics, "reports"),
@@ -610,6 +656,10 @@ fun AdminDashboardScreen(
       items(announcements.take(2), key = { "ann_${it.id}" }) { ann ->
         AnnouncementSummaryCard(ann)
       }
+    }
+
+    item {
+      JyBusinessFooter(settings = settings, onNotify = onNotify)
     }
   }
 }

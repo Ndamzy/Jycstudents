@@ -89,6 +89,34 @@ abstract class FirestoreEmulatorTestBase {
       }
     }
 
+  protected suspend fun signInVerifiedAdminUser(
+    email: String = "joshua.dangana@gmail.com"
+  ): String =
+    withContext(Dispatchers.IO) {
+      withTimeout(AUTH_TIMEOUT_MS) {
+        val uid = signInTestUser(email)
+        val user = checkNotNull(auth.currentUser) { "Admin user not signed in" }
+        val url =
+          java.net.URL(
+            "http://$EMULATOR_HOST:$AUTH_PORT/identitytoolkit.googleapis.com/v1/projects/$PROJECT_ID/accounts:update"
+          )
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+          requestMethod = "POST"
+          doOutput = true
+          setRequestProperty("Content-Type", "application/json")
+          setRequestProperty("Authorization", "Bearer owner")
+        }
+        val body = """{"localId":"$uid","emailVerified":true}"""
+        conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        check(conn.responseCode in 200..299) {
+          "Auth emulator emailVerified update failed: HTTP ${conn.responseCode}"
+        }
+        conn.disconnect()
+        user.getIdToken(true).await()
+        uid
+      }
+    }
+
   protected fun Throwable.unwrapFirestoreException(): FirebaseFirestoreException? {
     var current: Throwable? = this
     while (current != null) {

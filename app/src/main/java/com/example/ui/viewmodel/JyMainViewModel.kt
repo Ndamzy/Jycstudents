@@ -12,9 +12,11 @@ import com.example.data.model.Enrollment
 import com.example.data.model.InstitutionSettings
 import com.example.data.model.InstructorRole
 import com.example.data.model.JyCatalogDefaults
+import com.example.data.model.JyServiceItem
 import com.example.data.model.LearningMaterial
 import com.example.data.model.Payment
 import com.example.data.model.Programme
+import com.example.data.model.ServiceRequest
 import com.example.data.model.UserProfile
 import com.example.data.remote.GatewayVerificationResult
 import com.example.data.remote.PaymentGatewayClient
@@ -123,6 +125,18 @@ class JyMainViewModel(
     activeRole
       .flatMapLatest { role -> financeRepo.observePayments(role == "admin", currentUserId) }
       .catch { error -> handleStreamError("payments", error) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), emptyList())
+
+  val services: StateFlow<List<JyServiceItem>> =
+    financeRepo
+      .observeServices()
+      .catch { error -> handleStreamError("services", error) }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), emptyList())
+
+  val serviceRequests: StateFlow<List<ServiceRequest>> =
+    activeRole
+      .flatMapLatest { role -> financeRepo.observeServiceRequests(role == "admin", currentUserId) }
+      .catch { error -> handleStreamError("serviceRequests", error) }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), emptyList())
 
   val attendance: StateFlow<List<AttendanceRecord>> =
@@ -563,6 +577,134 @@ class JyMainViewModel(
     }
   }
 
+  fun saveServiceAdmin(service: JyServiceItem, onDone: () -> Unit = {}) {
+    viewModelScope.launch {
+      _actionBusy.value = true
+      val res = financeRepo.saveService(service)
+      if (res.isSuccess && _isAdminVerified.value) {
+        profileRepo.logAdminActivity(
+          actorName = actorDisplayName(),
+          action = "SAVE_SERVICE",
+          targetId = res.getOrDefault(service.id),
+          details = "Saved service '${service.title}' (${JyCatalogDefaults.formatNaira(service.defaultFeeNaira)})",
+        )
+      }
+      _feedbackMessage.value =
+        if (res.isSuccess) {
+          onDone()
+          "Service '${service.title}' saved."
+        } else {
+          "Failed to save service: ${res.exceptionOrNull()?.localizedMessage}"
+        }
+      _actionBusy.value = false
+    }
+  }
+
+  fun toggleServicePaymentAdmin(service: JyServiceItem) {
+    viewModelScope.launch {
+      _actionBusy.value = true
+      val next = !service.paymentEnabled
+      val res = financeRepo.toggleServicePayment(service.id, next)
+      if (res.isSuccess && _isAdminVerified.value) {
+        profileRepo.logAdminActivity(
+          actorName = actorDisplayName(),
+          action = "TOGGLE_SERVICE_PAYMENT",
+          targetId = service.id,
+          details = "Set payment for '${service.title}' to ${if (next) "ENABLED" else "DISABLED"}",
+        )
+      }
+      _feedbackMessage.value =
+        if (res.isSuccess) "${service.title} payment ${if (next) "enabled" else "disabled"}."
+        else "Update failed: ${res.exceptionOrNull()?.localizedMessage}"
+      _actionBusy.value = false
+    }
+  }
+
+  fun deleteServiceAdmin(serviceId: String) {
+    viewModelScope.launch {
+      _actionBusy.value = true
+      val res = financeRepo.deleteService(serviceId)
+      if (res.isSuccess && _isAdminVerified.value) {
+        profileRepo.logAdminActivity(
+          actorName = actorDisplayName(),
+          action = "DELETE_SERVICE",
+          targetId = serviceId,
+          details = "Removed service $serviceId",
+        )
+      }
+      _feedbackMessage.value =
+        if (res.isSuccess) "Service removed."
+        else "Failed to delete service: ${res.exceptionOrNull()?.localizedMessage}"
+      _actionBusy.value = false
+    }
+  }
+
+  fun createServiceRequest(
+    service: JyServiceItem,
+    details: String,
+    customFeeNaira: Long? = null,
+    customerPhoneOverride: String = "",
+    onCreated: (ServiceRequest) -> Unit = {},
+  ) {
+    val profile = (userProfileState.value as? UiState.Success)?.data
+    val name = profile?.fullName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
+    val phone = customerPhoneOverride.trim().ifBlank { profile?.phoneNumber.orEmpty() }
+    val email = profile?.email?.ifBlank { currentUserEmail } ?: currentUserEmail
+    val regNo = profile?.studentIdNumber?.ifBlank { "JYC-CLIENT" } ?: "JYC-CLIENT"
+    viewModelScope.launch {
+      _actionBusy.value = true
+      val res =
+        financeRepo.createServiceRequest(
+          customerUid = currentUserId,
+          customerName = name,
+          customerPhone = phone,
+          customerEmail = email,
+          customerRegNumber = regNo,
+          service = service,
+          details = details,
+          customFeeNaira = customFeeNaira,
+        )
+      val created = res.getOrNull()
+      if (created != null) {
+        _feedbackMessage.value =
+          "Service request ${created.requestNumber} & invoice ${created.invoiceNumber} created."
+        onCreated(created)
+      } else {
+        _feedbackMessage.value =
+          "Failed to create service request: ${res.exceptionOrNull()?.localizedMessage}"
+      }
+      _actionBusy.value = false
+    }
+  }
+
+  fun updateServiceRequestAdmin(
+    requestId: String,
+    status: String,
+    totalFeeNaira: Long? = null,
+    adminNotes: String = "",
+    onDone: () -> Unit = {},
+  ) {
+    viewModelScope.launch {
+      _actionBusy.value = true
+      val res =
+        financeRepo.updateServiceRequestAdmin(
+          requestId = requestId,
+          status = status,
+          totalFeeNaira = totalFeeNaira,
+          adminNotes = adminNotes,
+          actorName = actorDisplayName(),
+        )
+      _feedbackMessage.value =
+        if (res.isSuccess) {
+          onDone()
+          "Service request updated."
+        } else {
+          "Update failed: ${res.exceptionOrNull()?.localizedMessage}"
+        }
+      _actionBusy.value = false
+    }
+  }
+
   fun submitManualOpayPayment(
     enrollment: Enrollment,
     amountNaira: Long,
@@ -572,28 +714,58 @@ class JyMainViewModel(
     evidenceBase64: String,
     onDone: () -> Unit = {},
   ) {
+    submitUniversalTransferPayment(
+      enrollment = enrollment,
+      serviceRequest = null,
+      amountNaira = amountNaira,
+      method = "opay_transfer",
+      reference = reference,
+      paymentDate = paymentDate,
+      senderName = senderName,
+      senderBank = JyCatalogDefaults.OFFICIAL_OPAY_BANK,
+      evidenceBase64 = evidenceBase64,
+      onDone = onDone,
+    )
+  }
+
+  fun submitUniversalTransferPayment(
+    enrollment: Enrollment? = null,
+    serviceRequest: ServiceRequest? = null,
+    amountNaira: Long,
+    method: String,
+    reference: String,
+    paymentDate: String,
+    senderName: String,
+    senderBank: String,
+    evidenceBase64: String,
+    onDone: () -> Unit = {},
+  ) {
     val profile = (userProfileState.value as? UiState.Success)?.data
     val name = profile?.fullName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
-    val studentId = profile?.studentIdNumber?.ifBlank { "JYC-PENDING" } ?: "JYC-PENDING"
+    val studentId =
+      profile?.studentIdNumber?.ifBlank { serviceRequest?.requestNumber ?: "JYC-PENDING" }
+        ?: (serviceRequest?.requestNumber ?: "JYC-PENDING")
     viewModelScope.launch {
       _actionBusy.value = true
       val res =
-        financeRepo.submitPayment(
-          studentUid = currentUserId,
-          studentName = name,
-          studentIdNumber = studentId,
+        financeRepo.submitUniversalPayment(
+          customerUid = currentUserId,
+          customerName = name,
+          customerIdNumber = studentId,
           enrollment = enrollment,
+          serviceRequest = serviceRequest,
           amountNaira = amountNaira,
-          method = "opay_transfer",
+          method = method,
           reference = reference,
           paymentDate = paymentDate,
           senderName = senderName,
+          senderBank = senderBank,
           evidenceBase64 = evidenceBase64,
         )
       _feedbackMessage.value =
         if (res.isSuccess) {
           onDone()
-          "OPay transfer submitted for verification ($reference)."
+          "Payment submitted for admin verification (Ref: $reference)."
         } else {
           "Payment submission failed: ${res.exceptionOrNull()?.localizedMessage}"
         }
@@ -606,24 +778,42 @@ class JyMainViewModel(
     amountNaira: Long,
     onDone: (String) -> Unit = {},
   ) {
+    submitUniversalOnlinePayment(
+      enrollment = enrollment,
+      serviceRequest = null,
+      amountNaira = amountNaira,
+      onDone = onDone,
+    )
+  }
+
+  fun submitUniversalOnlinePayment(
+    enrollment: Enrollment? = null,
+    serviceRequest: ServiceRequest? = null,
+    amountNaira: Long,
+    onDone: (String) -> Unit = {},
+  ) {
     val profile = (userProfileState.value as? UiState.Success)?.data
     val name = profile?.fullName?.ifBlank { currentUserDisplayName } ?: currentUserDisplayName
-    val studentId = profile?.studentIdNumber?.ifBlank { "JYC-PENDING" } ?: "JYC-PENDING"
+    val studentId =
+      profile?.studentIdNumber?.ifBlank { serviceRequest?.requestNumber ?: "JYC-PENDING" }
+        ?: (serviceRequest?.requestNumber ?: "JYC-PENDING")
     val ref = PaymentGatewayClient.generateTransactionReference()
     val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
     viewModelScope.launch {
       _actionBusy.value = true
       val res =
-        financeRepo.submitPayment(
-          studentUid = currentUserId,
-          studentName = name,
-          studentIdNumber = studentId,
+        financeRepo.submitUniversalPayment(
+          customerUid = currentUserId,
+          customerName = name,
+          customerIdNumber = studentId,
           enrollment = enrollment,
+          serviceRequest = serviceRequest,
           amountNaira = amountNaira,
           method = "online_gateway",
           reference = ref,
           paymentDate = today,
           senderName = name,
+          senderBank = "Online Gateway",
           evidenceBase64 = "",
         )
       if (res.isSuccess) {
@@ -646,7 +836,8 @@ class JyMainViewModel(
   }
 
   fun recordAdminPayment(
-    enrollment: Enrollment,
+    enrollment: Enrollment? = null,
+    serviceRequest: ServiceRequest? = null,
     amountNaira: Long,
     method: String,
     reference: String,
@@ -659,6 +850,7 @@ class JyMainViewModel(
       val res =
         financeRepo.recordAdminPayment(
           enrollment = enrollment,
+          serviceRequest = serviceRequest,
           amountNaira = amountNaira,
           method = method,
           reference = reference,
@@ -666,10 +858,11 @@ class JyMainViewModel(
           remarks = remarks,
           actorName = actorDisplayName(),
         )
+      val targetLabel = enrollment?.studentName ?: serviceRequest?.customerName ?: "Customer"
       _feedbackMessage.value =
         if (res.isSuccess) {
           onDone()
-          "Recorded ${JyCatalogDefaults.formatNaira(amountNaira)} payment for ${enrollment.studentName}."
+          "Recorded ${JyCatalogDefaults.formatNaira(amountNaira)} payment for $targetLabel."
         } else {
           "Failed to record payment: ${res.exceptionOrNull()?.localizedMessage}"
         }
@@ -683,7 +876,7 @@ class JyMainViewModel(
       val res = financeRepo.adminReviewPayment(payment, approve, remarks, actorName = actorDisplayName())
       _feedbackMessage.value =
         if (res.isSuccess) {
-          if (approve) "Payment ${payment.reference} approved & student ledger updated."
+          if (approve) "Payment ${payment.reference} approved & ledger updated."
           else "Payment ${payment.reference} rejected."
         } else {
           "Review failed: ${res.exceptionOrNull()?.localizedMessage}"

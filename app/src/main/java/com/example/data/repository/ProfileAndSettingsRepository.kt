@@ -49,20 +49,61 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
         raw.opayAccountNumber == "0000000000" ||
         raw.opayAccountNumber == "1234567890" ||
         raw.opayAccountName.isBlank() ||
+        raw.opayAccountName == "JY-COMPUTERS" ||
         raw.opayAccountName.contains("Training Academy", ignoreCase = true)
-    return if (isLegacyAccount) {
-      raw.copy(
-        opayBankName = JyCatalogDefaults.OFFICIAL_OPAY_BANK,
-        opayAccountName = JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NAME,
-        opayAccountNumber = JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NUMBER,
-        opayInstructions =
-          raw.opayInstructions.ifBlank { JyCatalogDefaults.OFFICIAL_OPAY_INSTRUCTIONS },
-      )
-    } else if (raw.opayBankName.isBlank()) {
-      raw.copy(opayBankName = JyCatalogDefaults.OFFICIAL_OPAY_BANK)
-    } else {
-      raw
-    }
+
+    val normPrimaryPhone =
+      if (raw.contactPhone.isBlank() || raw.contactPhone.contains("800 592 6678")) {
+        JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE
+      } else {
+        raw.contactPhone
+      }
+    val normAltPhone =
+      raw.alternativePhone.ifBlank { JyCatalogDefaults.OFFICIAL_ALT_PHONE }
+    val normWhatsapp =
+      if (raw.whatsappNumber.isBlank() || raw.whatsappNumber.contains("800 592 6678")) {
+        JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE
+      } else {
+        raw.whatsappNumber
+      }
+    val normEmail =
+      if (raw.email.isBlank() || raw.email == "admissions@jycomputers.edu.ng") {
+        JyCatalogDefaults.OFFICIAL_EMAIL
+      } else {
+        raw.email
+      }
+    val normWebsite = raw.website.ifBlank { JyCatalogDefaults.OFFICIAL_WEBSITE }
+    val normAddress =
+      if (raw.physicalAddress.isBlank() || raw.physicalAddress.contains("Plot 24, Technology Drive")) {
+        JyCatalogDefaults.OFFICIAL_ADDRESS
+      } else {
+        raw.physicalAddress
+      }
+    val normSlogan = raw.slogan.ifBlank { JyCatalogDefaults.OFFICIAL_SLOGAN }
+
+    return raw.copy(
+      slogan = normSlogan,
+      contactPhone = normPrimaryPhone,
+      alternativePhone = normAltPhone,
+      whatsappNumber = normWhatsapp,
+      email = normEmail,
+      website = normWebsite,
+      physicalAddress = normAddress,
+      opayBankName =
+        if (isLegacyAccount || raw.opayBankName.isBlank()) JyCatalogDefaults.OFFICIAL_OPAY_BANK
+        else raw.opayBankName,
+      opayAccountName =
+        if (isLegacyAccount) JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NAME else raw.opayAccountName,
+      opayAccountNumber =
+        if (isLegacyAccount) JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NUMBER
+        else raw.opayAccountNumber,
+      opayInstructions =
+        if (isLegacyAccount || raw.opayInstructions.isBlank()) {
+          JyCatalogDefaults.OFFICIAL_OPAY_INSTRUCTIONS
+        } else {
+          raw.opayInstructions
+        },
+    )
   }
 
   fun observeInstitutionSettings(): Flow<InstitutionSettings> =
@@ -719,14 +760,20 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
         mapOf(
           "institutionName" to settings.institutionName.trim(),
           "motto" to settings.motto.trim(),
-          "contactPhone" to settings.contactPhone.trim(),
-          "email" to settings.email.trim(),
-          "physicalAddress" to settings.physicalAddress.trim(),
-          "opayBankName" to settings.opayBankName.trim(),
-          "opayAccountName" to settings.opayAccountName.trim(),
-          "opayAccountNumber" to settings.opayAccountNumber.trim(),
-          "opayInstructions" to settings.opayInstructions.trim(),
+          "slogan" to settings.slogan.trim().ifBlank { JyCatalogDefaults.OFFICIAL_SLOGAN },
+          "contactPhone" to settings.contactPhone.trim().ifBlank { JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE },
+          "alternativePhone" to settings.alternativePhone.trim().ifBlank { JyCatalogDefaults.OFFICIAL_ALT_PHONE },
+          "whatsappNumber" to settings.whatsappNumber.trim().ifBlank { JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE },
+          "email" to settings.email.trim().ifBlank { JyCatalogDefaults.OFFICIAL_EMAIL },
+          "website" to settings.website.trim().ifBlank { JyCatalogDefaults.OFFICIAL_WEBSITE },
+          "physicalAddress" to settings.physicalAddress.trim().ifBlank { JyCatalogDefaults.OFFICIAL_ADDRESS },
+          "opayBankName" to settings.opayBankName.trim().ifBlank { JyCatalogDefaults.OFFICIAL_OPAY_BANK },
+          "opayAccountName" to settings.opayAccountName.trim().ifBlank { JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NAME },
+          "opayAccountNumber" to settings.opayAccountNumber.trim().ifBlank { JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NUMBER },
+          "opayInstructions" to settings.opayInstructions.trim().ifBlank { JyCatalogDefaults.OFFICIAL_OPAY_INSTRUCTIONS },
           "onlinePaymentUrl" to settings.onlinePaymentUrl.trim(),
+          "paymentsEnabled" to settings.paymentsEnabled,
+          "allowPartialPayment" to settings.allowPartialPayment,
           "activeSession" to settings.activeSession.trim(),
           "signatoryName" to settings.signatoryName.trim(),
           "signatoryTitle" to settings.signatoryTitle.trim(),
@@ -786,15 +833,32 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
       val currentAccNum = settingsSnap.getString("opayAccountNumber").orEmpty()
       val currentBank = settingsSnap.getString("opayBankName").orEmpty()
       val currentAccName = settingsSnap.getString("opayAccountName").orEmpty()
+      val currentPhone = settingsSnap.getString("contactPhone").orEmpty()
+      val currentEmail = settingsSnap.getString("email").orEmpty()
+      val currentAlt = settingsSnap.getString("alternativePhone").orEmpty()
       if (
         !settingsSnap.exists() ||
           currentAccNum.isBlank() ||
           currentAccNum == "8030001122" ||
           currentBank.isBlank() ||
-          currentAccName.contains("Training Academy", ignoreCase = true)
+          currentAccName == "JY-COMPUTERS" ||
+          currentAccName.contains("Training Academy", ignoreCase = true) ||
+          currentPhone.contains("800 592 6678") ||
+          currentEmail == "admissions@jycomputers.edu.ng" ||
+          currentAlt.isBlank()
       ) {
-        saveInstitutionSettings(InstitutionSettings())
+        val current =
+          if (settingsSnap.exists()) {
+            settingsSnap.toObject(
+              InstitutionSettings::class.java,
+              DocumentSnapshot.ServerTimestampBehavior.ESTIMATE,
+            ) ?: InstitutionSettings()
+          } else {
+            InstitutionSettings()
+          }
+        saveInstitutionSettings(normalizeInstitutionSettings(current))
       }
+
       val programmesSnap = db.collection("programmes").limit(1).get().await()
       if (programmesSnap.isEmpty) {
         val batch = db.batch()
@@ -835,6 +899,31 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
             "updatedAt" to FieldValue.serverTimestamp(),
           ),
         )
+        batch.commit().await()
+      }
+
+      val servicesSnap = db.collection("services").limit(1).get().await()
+      if (servicesSnap.isEmpty) {
+        val batch = db.batch()
+        JyCatalogDefaults.DEFAULT_SERVICES.forEach { seed ->
+          val srvRef = db.collection("services").document(seed.id)
+          batch.set(
+            srvRef,
+            mapOf(
+              "title" to seed.title,
+              "category" to seed.category,
+              "description" to seed.description,
+              "defaultFeeNaira" to seed.defaultFeeNaira,
+              "paymentEnabled" to seed.paymentEnabled,
+              "allowPartialPayment" to seed.allowPartialPayment,
+              "isTrainingCourse" to seed.isTrainingCourse,
+              "linkedProgrammeId" to seed.linkedProgrammeId,
+              "active" to true,
+              "createdAt" to FieldValue.serverTimestamp(),
+              "updatedAt" to FieldValue.serverTimestamp(),
+            ),
+          )
+        }
         batch.commit().await()
       }
       Result.success(Unit)

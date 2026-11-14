@@ -329,3 +329,145 @@ test("Chat Room & Messages: direct room isolated to members; public group room a
   await assertFails(outsiderDb.collection("chat_rooms").doc("dm_alice_bob").get());
   await assertFails(outsiderDb.collection("chat_rooms").doc("dm_alice_bob").collection("messages").get());
 });
+
+test("Services & Service Requests: signed-in read, admin manages services, customer creates unpaid pending request", async () => {
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: "joshua.dangana@gmail.com",
+    email_verified: true,
+  }).firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+
+  const validService = {
+    title: "NYSC Registration Assistance",
+    category: "NYSC & Academic Portal",
+    description: "NYSC mobilization, biometric guidance, and portal registration.",
+    defaultFeeNaira: 5000,
+    paymentEnabled: true,
+    allowPartialPayment: false,
+    isTrainingCourse: false,
+    linkedProgrammeId: "",
+    active: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  // Non-admin cannot create/update service
+  await assertFails(aliceDb.collection("services").doc("nysc_reg").set(validService));
+  // Admin can create and toggle paymentEnabled
+  await assertSucceeds(adminDb.collection("services").doc("nysc_reg").set(validService));
+  await assertSucceeds(adminDb.collection("services").doc("nysc_reg").update({
+    paymentEnabled: false,
+    updatedAt: serverTimestamp(),
+  }));
+  // Signed-in user can read services
+  await assertSucceeds(aliceDb.collection("services").get());
+
+  const validRequest = {
+    userId: ALICE_UID,
+    customerName: "Alice Johnson",
+    customerPhone: "08156879310",
+    customerEmail: "alice@example.com",
+    customerRegNumber: "JYC-2026-1001",
+    requestNumber: "SRV-2026-1001",
+    invoiceNumber: "INV-2026-1001",
+    serviceId: "nysc_reg",
+    serviceTitle: "NYSC Registration Assistance",
+    serviceCategory: "NYSC & Academic Portal",
+    details: "NYSC Batch B registration",
+    totalFeeNaira: 5000,
+    amountPaidNaira: 0,
+    paymentStatus: "unpaid",
+    status: "pending",
+    adminNotes: "",
+    invoiceDate: "2026-11-14",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  // Alice can create pending unpaid service request
+  await assertSucceeds(aliceDb.collection("service_requests").doc("req_1").set(validRequest));
+  // Alice cannot spoof pre-paid service request
+  await assertFails(aliceDb.collection("service_requests").doc("req_bad1").set({
+    ...validRequest,
+    paymentStatus: "paid",
+    amountPaidNaira: 5000,
+  }));
+  // Alice cannot update her own request status or amountPaidNaira
+  await assertFails(aliceDb.collection("service_requests").doc("req_1").update({
+    paymentStatus: "paid",
+    amountPaidNaira: 5000,
+    updatedAt: serverTimestamp(),
+  }));
+  // Bob cannot read Alice's service request or list without userId filter
+  await assertFails(bobDb.collection("service_requests").doc("req_1").get());
+  await assertFails(bobDb.collection("service_requests").get());
+  await assertSucceeds(aliceDb.collection("service_requests").where("userId", "==", ALICE_UID).get());
+  // Admin can update request status
+  await assertSucceeds(adminDb.collection("service_requests").doc("req_1").update({
+    status: "in_progress",
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test("Universal Service Payment & Payment References: serviceRequestId allowed, reference registry immutable & admin-only", async () => {
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    email: "joshua.dangana@gmail.com",
+    email_verified: true,
+  }).firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+
+  const servicePayment = {
+    userId: ALICE_UID,
+    studentName: "Alice Johnson",
+    studentIdNumber: "JYC-2026-1001",
+    enrollmentId: "",
+    serviceRequestId: "req_1",
+    requestNumber: "SRV-2026-1001",
+    invoiceNumber: "INV-2026-1001",
+    programmeId: "nysc_reg",
+    programmeTitle: "NYSC Registration Assistance",
+    serviceCategory: "NYSC & Academic Portal",
+    amountNaira: 5000,
+    method: "bank_transfer",
+    reference: "GTB-77665544",
+    referenceNormalized: "GTB-77665544",
+    paymentDate: "2026-11-14",
+    senderName: "Alice Johnson",
+    senderBank: "Guaranty Trust Bank (GTBank)",
+    evidenceBase64: "",
+    status: "pending",
+    adminRemarks: "",
+    verifiedByUid: "",
+    verifiedByName: "",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  // Alice can submit bank_transfer for a serviceRequestId even with empty enrollmentId
+  await assertSucceeds(aliceDb.collection("payments").doc("pay_srv_1").set(servicePayment));
+  // Missing both enrollmentId and serviceRequestId must fail
+  await assertFails(aliceDb.collection("payments").doc("pay_srv_empty").set({
+    ...servicePayment,
+    serviceRequestId: "",
+  }));
+  // Student cannot write directly to payment_references
+  await assertFails(aliceDb.collection("payment_references").doc("GTB-77665544").set({
+    referenceNormalized: "GTB-77665544",
+    paymentId: "pay_srv_1",
+    createdAt: serverTimestamp(),
+  }));
+  // Admin can create immutable payment_references entry, cannot update or delete it
+  await assertSucceeds(adminDb.collection("payment_references").doc("GTB-77665544").set({
+    referenceNormalized: "GTB-77665544",
+    paymentId: "pay_srv_1",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(adminDb.collection("payment_references").doc("GTB-77665544").update({ paymentId: "tampered" }));
+  await assertFails(adminDb.collection("payment_references").doc("GTB-77665544").delete());
+  // Signed-in user can check existence of a single reference doc
+  await assertSucceeds(aliceDb.collection("payment_references").doc("GTB-77665544").get());
+  // Non-admin cannot list all payment_references
+  await assertFails(aliceDb.collection("payment_references").get());
+});
+

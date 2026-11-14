@@ -60,6 +60,8 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -95,6 +97,8 @@ import com.example.data.model.InstitutionSettings
 import com.example.data.model.JyCatalogDefaults
 import com.example.data.model.Programme
 import com.example.data.remote.GoogleAuthHelper
+import com.example.ui.components.JyBusinessFooter
+import com.example.ui.components.OfficialContactCard
 import com.example.ui.components.OfficialJyLogoBadge
 import com.example.ui.components.OfficialOpayBankCard
 import com.example.ui.components.PassportCameraCaptureDialog
@@ -158,9 +162,9 @@ fun SplashScreen(onFinished: () -> Unit) {
       )
       Spacer(modifier = Modifier.height(6.dp))
       Text(
-        text = "TRAINING INSTITUTE MANAGEMENT SYSTEM",
+        text = JyCatalogDefaults.OFFICIAL_SLOGAN,
         style = MaterialTheme.typography.labelLarge,
-        color = Color.White.copy(alpha = 0.88f),
+        color = Color.White.copy(alpha = 0.90f),
         textAlign = TextAlign.Center,
       )
       Spacer(modifier = Modifier.height(28.dp))
@@ -178,127 +182,139 @@ fun WelcomeScreen(
   onContinueToLogin: () -> Unit,
   onOpenRecovery: () -> Unit,
 ) {
-  Column(
-    modifier =
-      Modifier.fillMaxSize()
-        .background(MaterialTheme.colorScheme.background)
-        .verticalScroll(rememberScrollState())
-        .statusBarsPadding()
-        .navigationBarsPadding()
-        .padding(24.dp),
-    horizontalAlignment = Alignment.CenterHorizontally,
-  ) {
-    Column(modifier = Modifier.widthIn(max = 560.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        OfficialJyLogoBadge(size = 56.dp, cornerRadius = 12.dp)
-        Spacer(modifier = Modifier.width(12.dp))
-        Column {
-          Text(
-            "JY-COMPUTERS",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary,
-          )
-          Text(
-            "Learn • Practice • Excel",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+  val scope = rememberCoroutineScope()
+  val snackbarHostState = remember { SnackbarHostState() }
+  val defaultSettings = remember { InstitutionSettings() }
+
+  Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
+    Column(
+      modifier =
+        Modifier.fillMaxSize()
+          .background(MaterialTheme.colorScheme.background)
+          .padding(padding)
+          .verticalScroll(rememberScrollState())
+          .statusBarsPadding()
+          .navigationBarsPadding()
+          .padding(24.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      Column(modifier = Modifier.widthIn(max = 560.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          OfficialJyLogoBadge(size = 56.dp, cornerRadius = 12.dp)
+          Spacer(modifier = Modifier.width(12.dp))
+          Column {
+            Text(
+              "JY-COMPUTERS",
+              style = MaterialTheme.typography.titleLarge,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+              JyCatalogDefaults.OFFICIAL_SLOGAN,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Card(
+          shape = RoundedCornerShape(24.dp),
+          elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Image(
+            painter = painterResource(id = R.drawable.img_welcome_hero),
+            contentDescription = "JY-Computers students collaborating in computer lab",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxWidth().height(210.dp),
           )
         }
-      }
 
-      Spacer(modifier = Modifier.height(20.dp))
-
-      Card(
-        shape = RoundedCornerShape(24.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Image(
-          painter = painterResource(id = R.drawable.img_welcome_hero),
-          contentDescription = "JY-Computers students collaborating in computer lab",
-          contentScale = ContentScale.Crop,
-          modifier = Modifier.fillMaxWidth().height(210.dp),
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+          text = "Your Complete Digital Campus & ICT Hub",
+          style = MaterialTheme.typography.headlineMedium,
+          fontWeight = FontWeight.Bold,
+          textAlign = TextAlign.Center,
         )
-      }
-
-      Spacer(modifier = Modifier.height(24.dp))
-      Text(
-        text = "Your Complete Digital Campus",
-        style = MaterialTheme.typography.headlineMedium,
-        fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center,
-      )
-      Spacer(modifier = Modifier.height(8.dp))
-      Text(
-        text =
-          "Register for certified computer training programmes, verify OPay & online tuition, track results, and download official certificates.",
-        style = MaterialTheme.typography.bodyLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = TextAlign.Center,
-      )
-
-      Spacer(modifier = Modifier.height(20.dp))
-
-      val highlights =
-        listOf(
-          Triple(Icons.Filled.School, "Certified IT Programmes", "Beginner to Advanced training levels"),
-          Triple(Icons.Filled.Payments, "Official OPay & Online Fees", "JY-COMPUTERS • 6118366524 • Instant Receipts"),
-          Triple(Icons.Filled.MenuBook, "Student & Admin Portals", "Role-based campus management & reports"),
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+          text =
+            "Register for certified computer training programmes, book IT, Web, Repairs, Cyber Café, NYSC, CAC & printing services, and pay directly via OPay or Bank Transfer.",
+          style = MaterialTheme.typography.bodyLarge,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          textAlign = TextAlign.Center,
         )
-      highlights.forEach { (icon, title, desc) ->
-        Card(
-          modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-          shape = RoundedCornerShape(16.dp),
-        ) {
-          Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        val highlights =
+          listOf(
+            Triple(Icons.Filled.School, "Certified IT & Repair Courses", "Basic, Certificate, Diploma, Coding & Hardware"),
+            Triple(Icons.Filled.Payments, "Official OPay Business Account", "OPay • Jy-computers • 6118366524 • All Services"),
+            Triple(Icons.Filled.MenuBook, "ICT, Web, NYSC, CAC & Printing", "Instant invoices & confirmed PDF receipts"),
+          )
+        highlights.forEach { (icon, title, desc) ->
+          Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            shape = RoundedCornerShape(16.dp),
           ) {
-            Box(
-              modifier =
-                Modifier.size(42.dp)
-                  .clip(RoundedCornerShape(12.dp))
-                  .background(MaterialTheme.colorScheme.primaryContainer),
-              contentAlignment = Alignment.Center,
+            Row(
+              modifier = Modifier.padding(14.dp),
+              verticalAlignment = Alignment.CenterVertically,
             ) {
-              Icon(icon, contentDescription = title, tint = MaterialTheme.colorScheme.primary)
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-              Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-              Text(
-                desc,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
+              Box(
+                modifier =
+                  Modifier.size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(icon, contentDescription = title, tint = MaterialTheme.colorScheme.primary)
+              }
+              Spacer(modifier = Modifier.width(12.dp))
+              Column {
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                  desc,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
             }
           }
         }
-      }
 
-      Spacer(modifier = Modifier.height(24.dp))
-      Button(
-        onClick = onContinueToLogin,
-        modifier = Modifier.fillMaxWidth().height(54.dp).testTag("welcome_continue_button"),
-        shape = RoundedCornerShape(16.dp),
-      ) {
-        Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null)
-        Spacer(modifier = Modifier.width(8.dp))
-        Text("Sign In to JY-Computers Portal", style = MaterialTheme.typography.labelLarge)
-      }
-      Spacer(modifier = Modifier.height(8.dp))
-      TextButton(
-        onClick = onOpenRecovery,
-        modifier = Modifier.testTag("welcome_recovery_button"),
-      ) {
-        Icon(Icons.Filled.HelpOutline, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text("Need help accessing your account?")
+        Spacer(modifier = Modifier.height(20.dp))
+        Button(
+          onClick = onContinueToLogin,
+          modifier = Modifier.fillMaxWidth().height(54.dp).testTag("welcome_continue_button"),
+          shape = RoundedCornerShape(16.dp),
+        ) {
+          Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null)
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("Sign In to JY-Computers Portal", style = MaterialTheme.typography.labelLarge)
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        TextButton(
+          onClick = onOpenRecovery,
+          modifier = Modifier.testTag("welcome_recovery_button"),
+        ) {
+          Icon(Icons.Filled.HelpOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Need help accessing your account?")
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        OfficialContactCard(
+          settings = defaultSettings,
+          onNotify = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } },
+        )
       }
     }
   }
@@ -485,18 +501,22 @@ fun LoginScreen(
 fun AccountRecoveryScreen(onBack: () -> Unit) {
   BackHandler(onBack = onBack)
   val context = LocalContext.current
+  val scope = rememberCoroutineScope()
+  val snackbarHostState = remember { SnackbarHostState() }
+  val defaultSettings = remember { InstitutionSettings() }
 
   Scaffold(
+    snackbarHost = { SnackbarHost(snackbarHostState) },
     topBar = {
       TopAppBar(
-        title = { Text("Account & Password Recovery") },
+        title = { Text("Account & Support Help") },
         navigationIcon = {
           IconButton(onClick = onBack, modifier = Modifier.testTag("recovery_back_button")) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
           }
         },
       )
-    }
+    },
   ) { padding ->
     Column(
       modifier =
@@ -529,12 +549,18 @@ fun AccountRecoveryScreen(onBack: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
             Button(
               onClick = {
-                val intent =
-                  Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse("https://accounts.google.com/signin/recovery"),
-                  )
-                context.startActivity(intent)
+                try {
+                  val intent =
+                    Intent(
+                      Intent.ACTION_VIEW,
+                      Uri.parse("https://accounts.google.com/signin/recovery"),
+                    )
+                  context.startActivity(intent)
+                } catch (_: Exception) {
+                  scope.launch {
+                    snackbarHostState.showSnackbar("Open https://accounts.google.com/signin/recovery in your browser.")
+                  }
+                }
               },
               modifier = Modifier.fillMaxWidth().height(50.dp).testTag("open_google_recovery_button"),
             ) {
@@ -545,24 +571,10 @@ fun AccountRecoveryScreen(onBack: () -> Unit) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Card(
-          shape = RoundedCornerShape(20.dp),
-          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Column(modifier = Modifier.padding(20.dp)) {
-            Text(
-              "Institutional Desk Support",
-              style = MaterialTheme.typography.titleMedium,
-              fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-              "Need to update your registered email or restore a suspended account? Contact the JY-Computers Admissions Desk:\n\nEmail: admissions@jycomputers.edu.ng\nPhone: +234 800 592 6678",
-              style = MaterialTheme.typography.bodyMedium,
-            )
-          }
-        }
+        OfficialContactCard(
+          settings = defaultSettings,
+          onNotify = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } },
+        )
       }
     }
   }
@@ -1068,6 +1080,7 @@ fun StudentRegistrationScreen(
             Text("Complete Registration")
           }
         }
+        JyBusinessFooter(settings = settings, onNotify = onNotify)
         Spacer(modifier = Modifier.height(24.dp))
       }
     }

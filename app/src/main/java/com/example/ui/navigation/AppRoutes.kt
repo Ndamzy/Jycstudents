@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.Badge
@@ -99,6 +100,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.InstitutionSettings
+import com.example.data.model.JyCatalogDefaults
 import com.example.ui.components.OfficialJyLogoBadge
 import com.example.ui.components.StatusPill
 import com.example.ui.screens.AcademicResultsScreen
@@ -117,6 +119,7 @@ import com.example.ui.screens.NotificationsScreen
 import com.example.ui.screens.PaymentHistoryScreen
 import com.example.ui.screens.PaymentScreen
 import com.example.ui.screens.ReportsAndAnalyticsScreen
+import com.example.ui.screens.ServicesHubScreen
 import com.example.ui.screens.StudentDashboardScreen
 import com.example.ui.screens.StudentLiveChatScreen
 import com.example.ui.screens.StudentProfileScreen
@@ -142,6 +145,7 @@ object AppRoutes {
   const val INSTRUCTOR_DASHBOARD = "instructor_dashboard"
   const val COURSE_CATALOGUE = "course_catalogue"
   const val COURSE_REGISTRATION = "course_registration"
+  const val SERVICES = "services"
   const val PAYMENTS = "payments"
   const val PAYMENT_HISTORY = "payment_history"
   const val ATTENDANCE = "attendance"
@@ -181,6 +185,8 @@ fun AuthenticatedAppShell(
   val programmes by mainVm.programmes.collectAsStateWithLifecycle()
   val enrollments by mainVm.enrollments.collectAsStateWithLifecycle()
   val payments by mainVm.payments.collectAsStateWithLifecycle()
+  val services by mainVm.services.collectAsStateWithLifecycle()
+  val serviceRequests by mainVm.serviceRequests.collectAsStateWithLifecycle()
   val attendance by mainVm.attendance.collectAsStateWithLifecycle()
   val results by mainVm.results.collectAsStateWithLifecycle()
   val certificates by mainVm.certificates.collectAsStateWithLifecycle()
@@ -262,7 +268,7 @@ fun AuthenticatedAppShell(
           )
           Spacer(modifier = Modifier.height(4.dp))
           Text(
-            "EMPOWERING PEOPLE THROUGH TECHNOLOGY",
+            JyCatalogDefaults.OFFICIAL_SLOGAN,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
@@ -341,6 +347,8 @@ fun AuthenticatedAppShell(
         }
 
       var currentRoute by rememberSaveable(homeRoute) { mutableStateOf(homeRoute) }
+      var checkoutEnrollmentId by rememberSaveable { mutableStateOf<String?>(null) }
+      var checkoutServiceRequestId by rememberSaveable { mutableStateOf<String?>(null) }
       var showMoreSheet by remember { mutableStateOf(false) }
       var showWorkspaceMenu by remember { mutableStateOf(false) }
       val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -358,7 +366,7 @@ fun AuthenticatedAppShell(
             listOf(
               NavDestination(AppRoutes.ADMIN_DASHBOARD, "Dashboard", Icons.Filled.Dashboard),
               NavDestination(AppRoutes.ADMIN_STUDENTS, "Students", Icons.Filled.Group),
-              NavDestination(AppRoutes.COURSE_CATALOGUE, "Courses", Icons.Filled.MenuBook),
+              NavDestination(AppRoutes.SERVICES, "Services", Icons.Filled.Storefront),
               NavDestination(AppRoutes.PAYMENTS, "Payments", Icons.Filled.Payments),
               NavDestination(AppRoutes.REPORTS, "Reports", Icons.Filled.Analytics),
             )
@@ -373,9 +381,9 @@ fun AuthenticatedAppShell(
           else ->
             listOf(
               NavDestination(AppRoutes.STUDENT_DASHBOARD, "Home", Icons.Filled.Dashboard),
+              NavDestination(AppRoutes.SERVICES, "Services", Icons.Filled.Storefront),
               NavDestination(AppRoutes.COURSE_CATALOGUE, "Courses", Icons.Filled.MenuBook),
               NavDestination(AppRoutes.PAYMENTS, "Pay", Icons.Filled.Payments),
-              NavDestination(AppRoutes.STUDENT_CHAT, "Chat", Icons.AutoMirrored.Filled.Chat),
               NavDestination(AppRoutes.PROFILE, "Profile", Icons.Filled.Person),
             )
         }
@@ -387,6 +395,7 @@ fun AuthenticatedAppShell(
               NavDestination(AppRoutes.ADMIN_DASHBOARD, "Dashboard", Icons.Filled.Dashboard),
               NavDestination(AppRoutes.ADMIN_STUDENTS, "Students", Icons.Filled.Group),
               NavDestination(AppRoutes.REGISTRATION, "Student Registration", Icons.Filled.PersonAdd),
+              NavDestination(AppRoutes.SERVICES, "Services & Invoices", Icons.Filled.Storefront),
               NavDestination(AppRoutes.COURSE_CATALOGUE, "Courses", Icons.Filled.MenuBook),
               NavDestination(AppRoutes.COURSE_REGISTRATION, "Enrolment", Icons.Filled.School),
               NavDestination(AppRoutes.PAYMENTS, "Payments", Icons.Filled.Payments),
@@ -399,6 +408,7 @@ fun AuthenticatedAppShell(
             listOf(
               NavDestination(AppRoutes.INSTRUCTOR_DASHBOARD, "Dashboard", Icons.Filled.Dashboard),
               NavDestination(AppRoutes.COURSE_CATALOGUE, "Assigned Courses", Icons.Filled.MenuBook),
+              NavDestination(AppRoutes.SERVICES, "JY-Computers Services", Icons.Filled.Storefront),
               NavDestination(AppRoutes.ATTENDANCE, "Attendance", Icons.Filled.EventAvailable),
               NavDestination(AppRoutes.RESULTS, "Academic Results", Icons.Filled.Grade),
               NavDestination(AppRoutes.STUDENT_CHAT, "Student Chat", Icons.AutoMirrored.Filled.Chat),
@@ -410,9 +420,10 @@ fun AuthenticatedAppShell(
           else ->
             listOf(
               NavDestination(AppRoutes.STUDENT_DASHBOARD, "Dashboard", Icons.Filled.Dashboard),
+              NavDestination(AppRoutes.SERVICES, "Services & Invoices", Icons.Filled.Storefront),
               NavDestination(AppRoutes.COURSE_CATALOGUE, "Courses & Materials", Icons.Filled.MenuBook),
               NavDestination(AppRoutes.COURSE_REGISTRATION, "Course Enrolment", Icons.Filled.School),
-              NavDestination(AppRoutes.PAYMENTS, "Tuition Payments", Icons.Filled.Payments),
+              NavDestination(AppRoutes.PAYMENTS, "Checkout & Payments", Icons.Filled.Payments),
               NavDestination(AppRoutes.PAYMENT_HISTORY, "Payment History", Icons.Filled.History),
               NavDestination(AppRoutes.ATTENDANCE, "Attendance", Icons.Filled.EventAvailable),
               NavDestination(AppRoutes.RESULTS, "Academic Results", Icons.Filled.Grade),
@@ -448,6 +459,7 @@ fun AuthenticatedAppShell(
               add(Triple(AppRoutes.ADMIN_STUDENTS, "Students", Icons.Filled.Group))
               add(Triple(AppRoutes.REGISTRATION, "Student Registration", Icons.Filled.PersonAdd))
             }
+            add(Triple(AppRoutes.SERVICES, "Services & Invoices", Icons.Filled.Storefront))
             add(Triple(AppRoutes.COURSE_CATALOGUE, "Courses & Materials", Icons.Filled.MenuBook))
             add(Triple(AppRoutes.COURSE_REGISTRATION, "Enrolment", Icons.Filled.School))
             add(Triple(AppRoutes.PAYMENTS, "Payments", Icons.Filled.AccountBalanceWallet))
@@ -698,12 +710,23 @@ fun AuthenticatedAppShell(
                       profile = profile,
                       settings = settings,
                       enrollments = enrollments,
+                      serviceRequests = serviceRequests,
                       payments = payments,
                       attendance = attendance,
                       results = results,
                       certificates = certificates,
                       announcements = announcements,
                       programmes = programmes,
+                      onPayEnrollment = { enr ->
+                        checkoutEnrollmentId = enr.id
+                        checkoutServiceRequestId = null
+                        currentRoute = AppRoutes.PAYMENTS
+                      },
+                      onPayServiceRequest = { req ->
+                        checkoutServiceRequestId = req.id
+                        checkoutEnrollmentId = null
+                        currentRoute = AppRoutes.PAYMENTS
+                      },
                       onNotify = { msg -> mainVm.postFeedback(msg) },
                       onNavigate = { route -> currentRoute = route },
                     )
@@ -714,6 +737,7 @@ fun AuthenticatedAppShell(
                       allUsers = allUsersAdmin,
                       programmes = programmes,
                       enrollments = enrollments,
+                      serviceRequests = serviceRequests,
                       payments = payments,
                       announcements = announcements,
                       activityLogs = activityLogsAdmin,
@@ -721,6 +745,7 @@ fun AuthenticatedAppShell(
                         mainVm.approveOrRejectStudentAdmin(uid, name, approval)
                       },
                       onOpenAddStudent = { currentRoute = AppRoutes.REGISTRATION },
+                      onNotify = { msg -> mainVm.postFeedback(msg) },
                       onNavigate = { route -> currentRoute = route },
                     )
 
@@ -784,6 +809,31 @@ fun AuthenticatedAppShell(
                       onGoToRegister = { currentRoute = AppRoutes.COURSE_REGISTRATION },
                     )
 
+                  AppRoutes.SERVICES ->
+                    ServicesHubScreen(
+                      profile = profile,
+                      settings = settings,
+                      services = services,
+                      serviceRequests = serviceRequests,
+                      activeRole = activeRole,
+                      isBusy = actionBusy,
+                      onSaveServiceAdmin = { srv -> mainVm.saveServiceAdmin(srv) },
+                      onToggleServicePaymentAdmin = { srv -> mainVm.toggleServicePaymentAdmin(srv) },
+                      onDeleteServiceAdmin = { id -> mainVm.deleteServiceAdmin(id) },
+                      onCreateServiceRequest = { srv, details, customFee, phone, onCreated ->
+                        mainVm.createServiceRequest(srv, details, customFee, phone, onCreated)
+                      },
+                      onUpdateServiceRequestAdmin = { id, status, fee, notes ->
+                        mainVm.updateServiceRequestAdmin(id, status, fee, notes)
+                      },
+                      onPayRequestNow = { req ->
+                        checkoutServiceRequestId = req.id
+                        checkoutEnrollmentId = null
+                        currentRoute = AppRoutes.PAYMENTS
+                      },
+                      onNotify = { msg -> mainVm.postFeedback(msg) },
+                    )
+
                   AppRoutes.COURSE_REGISTRATION ->
                     CourseRegistrationScreen(
                       settings = settings,
@@ -800,7 +850,11 @@ fun AuthenticatedAppShell(
                         mainVm.updateEnrollmentStatusAdmin(id, status)
                       },
                       onNotify = { msg -> mainVm.postFeedback(msg) },
-                      onGoToPayment = { currentRoute = AppRoutes.PAYMENTS },
+                      onGoToPayment = { enr ->
+                        checkoutEnrollmentId = enr.id
+                        checkoutServiceRequestId = null
+                        currentRoute = AppRoutes.PAYMENTS
+                      },
                     )
 
                   AppRoutes.PAYMENTS ->
@@ -808,19 +862,40 @@ fun AuthenticatedAppShell(
                       profile = profile,
                       settings = settings,
                       enrollments = enrollments,
+                      serviceRequests = serviceRequests,
+                      services = services,
                       payments = payments,
                       activeRole = activeRole,
                       isBusy = actionBusy,
-                      onSubmitOnlinePayment = { enr, amt -> mainVm.submitOnlinePayment(enr, amt) },
-                      onSubmitOpayTransfer = { enr, amt, ref, payDate, sender, img ->
-                        mainVm.submitManualOpayPayment(enr, amt, ref, payDate, sender, img)
+                      preselectedEnrollmentId = checkoutEnrollmentId,
+                      preselectedServiceRequestId = checkoutServiceRequestId,
+                      onClearPreselection = {
+                        checkoutEnrollmentId = null
+                        checkoutServiceRequestId = null
                       },
-                      onAdminRecordPayment = { enr, amt, method, ref, payDate, remarks ->
-                        mainVm.recordAdminPayment(enr, amt, method, ref, payDate, remarks)
+                      onSubmitOnlinePayment = { enr, req, amt ->
+                        mainVm.submitUniversalOnlinePayment(enr, req, amt)
+                      },
+                      onSubmitTransferPayment = { enr, req, amt, method, ref, payDate, sender, bank, img ->
+                        mainVm.submitUniversalTransferPayment(
+                          enrollment = enr,
+                          serviceRequest = req,
+                          amountNaira = amt,
+                          method = method,
+                          reference = ref,
+                          paymentDate = payDate,
+                          senderName = sender,
+                          senderBank = bank,
+                          evidenceBase64 = img,
+                        )
+                      },
+                      onAdminRecordPayment = { enr, req, amt, method, ref, payDate, remarks ->
+                        mainVm.recordAdminPayment(enr, req, amt, method, ref, payDate, remarks)
                       },
                       onAdminReviewPayment = { pay, approve, remarks ->
                         mainVm.reviewPaymentAdmin(pay, approve, remarks)
                       },
+                      onNavigateToServices = { currentRoute = AppRoutes.SERVICES },
                       onNotify = { msg -> mainVm.postFeedback(msg) },
                     )
 
@@ -828,6 +903,7 @@ fun AuthenticatedAppShell(
                     PaymentHistoryScreen(
                       payments = payments,
                       settings = settings,
+                      onNotify = { msg -> mainVm.postFeedback(msg) },
                     )
 
                   AppRoutes.ATTENDANCE ->
@@ -948,6 +1024,7 @@ fun AuthenticatedAppShell(
                       isBusy = actionBusy,
                       onSaveSettings = { updated -> mainVm.saveInstitutionSettings(updated) },
                       onSeedDefaults = { mainVm.seedDefaultProgrammesNow() },
+                      onOpenServices = { currentRoute = AppRoutes.SERVICES },
                       onNotify = { msg -> mainVm.postFeedback(msg) },
                     )
 
@@ -957,9 +1034,11 @@ fun AuthenticatedAppShell(
                       allUsers = allUsersAdmin,
                       enrollments = enrollments,
                       payments = payments,
+                      serviceRequests = serviceRequests,
                       attendance = attendance,
                       results = results,
                       certificates = certificates,
+                      onNotify = { msg -> mainVm.postFeedback(msg) },
                     )
 
                   AppRoutes.REGISTRATION ->
@@ -1156,7 +1235,8 @@ private fun screenTitleForRoute(route: String): String =
     AppRoutes.INSTRUCTOR_DASHBOARD -> "Instructor Dashboard"
     AppRoutes.COURSE_CATALOGUE -> "Courses & Materials"
     AppRoutes.COURSE_REGISTRATION -> "Course Enrolment"
-    AppRoutes.PAYMENTS -> "Tuition Payments"
+    AppRoutes.SERVICES -> "Services & Invoices"
+    AppRoutes.PAYMENTS -> "Checkout & Payments"
     AppRoutes.PAYMENT_HISTORY -> "Payment History"
     AppRoutes.ATTENDANCE -> "Attendance"
     AppRoutes.RESULTS -> "Academic Results"

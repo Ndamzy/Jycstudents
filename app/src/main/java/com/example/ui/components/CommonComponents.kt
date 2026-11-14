@@ -1,8 +1,11 @@
 package com.example.ui.components
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,18 +24,26 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -82,10 +93,96 @@ fun OfficialJyLogoBadge(
   }
 }
 
+fun launchDialer(context: Context, phone: String, onNotify: (String) -> Unit) {
+  val digits = phone.trim().replace(" ", "")
+  try {
+    val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$digits")).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(intent)
+  } catch (_: ActivityNotFoundException) {
+    onNotify("No phone app found. Dial $digits manually.")
+  } catch (_: Exception) {
+    onNotify("Unable to open phone dialer for $digits.")
+  }
+}
+
+fun launchWhatsApp(context: Context, rawPhone: String, onNotify: (String) -> Unit) {
+  val clean = rawPhone.filter { it.isDigit() }
+  val intl =
+    when {
+      clean.startsWith("234") -> clean
+      clean.startsWith("0") && clean.length == 11 -> "234${clean.drop(1)}"
+      clean.isNotBlank() -> clean
+      else -> "2348156879310"
+    }
+  val url = "https://wa.me/$intl"
+  try {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(intent)
+  } catch (_: ActivityNotFoundException) {
+    onNotify("Open $url in your browser or WhatsApp.")
+  } catch (_: Exception) {
+    onNotify("Unable to launch WhatsApp.")
+  }
+}
+
+fun launchEmail(context: Context, email: String, onNotify: (String) -> Unit) {
+  val target = email.trim().ifBlank { JyCatalogDefaults.OFFICIAL_EMAIL }
+  try {
+    val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:$target")).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(intent)
+  } catch (_: ActivityNotFoundException) {
+    onNotify("No email app found. Contact $target.")
+  } catch (_: Exception) {
+    onNotify("Unable to open email client.")
+  }
+}
+
+fun launchWebsite(context: Context, website: String, onNotify: (String) -> Unit) {
+  val raw = website.trim().ifBlank { JyCatalogDefaults.OFFICIAL_WEBSITE }
+  val url = if (raw.startsWith("http://") || raw.startsWith("https://")) raw else "https://$raw"
+  try {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(intent)
+  } catch (_: ActivityNotFoundException) {
+    onNotify("Visit $url in your browser.")
+  } catch (_: Exception) {
+    onNotify("Unable to open website.")
+  }
+}
+
+fun launchOpayOrBankApp(context: Context, onNotify: (String) -> Unit) {
+  try {
+    val opayIntent = context.packageManager.getLaunchIntentForPackage("team.opay.pay")
+    if (opayIntent != null) {
+      opayIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      context.startActivity(opayIntent)
+      onNotify("Opened OPay app. After transfer, return here to submit your transaction reference.")
+      return
+    }
+    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://opayweb.com")).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(webIntent)
+    onNotify("OPay mobile portal opened. Return here after transfer to submit your reference.")
+  } catch (_: Exception) {
+    onNotify("Use your banking or OPay app to transfer to 6118366524 (Jy-computers), then submit your reference below.")
+  }
+}
+
 @Composable
 fun OfficialOpayBankCard(
   settings: InstitutionSettings,
   onCopied: (String) -> Unit,
+  amountPayableNaira: Long? = null,
+  showLaunchBankButton: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -116,23 +213,32 @@ fun OfficialOpayBankCard(
     modifier = modifier.fillMaxWidth().border(1.dp, JyRoyalBlue.copy(alpha = 0.25f), RoundedCornerShape(18.dp)),
   ) {
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Filled.AccountBalance, contentDescription = null, tint = JyRoyalBlue)
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-          "Official Payment Details",
-          style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold,
-          color = JyDeepNavy,
-        )
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Icon(Icons.Filled.AccountBalance, contentDescription = null, tint = JyRoyalBlue)
+          Spacer(modifier = Modifier.width(8.dp))
+          Text(
+            "Official Business Payment Account",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = JyDeepNavy,
+          )
+        }
+        if (amountPayableNaira != null && amountPayableNaira > 0L) {
+          StatusPill(
+            text = "Due: ${JyCatalogDefaults.formatNaira(amountPayableNaira)}",
+            containerColor = JyRoyalBlue,
+            contentColor = Color.White,
+          )
+        }
       }
-      Text("Bank: $bankName", style = MaterialTheme.typography.bodyMedium, color = JyDeepNavy)
-      Text(
-        "Account Name: $accountName",
-        style = MaterialTheme.typography.bodyMedium,
-        fontWeight = FontWeight.SemiBold,
-        color = JyDeepNavy,
-      )
+
+      Text("Bank: $bankName", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = JyDeepNavy)
+
       Surface(
         color = Color.White,
         shape = RoundedCornerShape(12.dp),
@@ -143,9 +249,48 @@ fun OfficialOpayBankCard(
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          Column {
+          Column(modifier = Modifier.weight(1f)) {
             Text(
-              "Account Number",
+              "Account Name",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+              accountName,
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold,
+              color = JyDeepNavy,
+            )
+          }
+          OutlinedButton(
+            onClick = {
+              val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+              cm.setPrimaryClip(ClipData.newPlainText("JY-COMPUTERS Account Name", accountName))
+              onCopied("Account Name ($accountName) copied!")
+            },
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.testTag("copy_opay_name_button"),
+          ) {
+            Icon(Icons.Filled.ContentCopy, contentDescription = "Copy account name", modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Copy Name", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+          }
+        }
+      }
+
+      Surface(
+        color = Color.White,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              "Account Number ($bankName)",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -160,7 +305,7 @@ fun OfficialOpayBankCard(
             onClick = {
               val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
               cm.setPrimaryClip(ClipData.newPlainText("JY-COMPUTERS OPay Account", accountNumber))
-              onCopied("OPay Account Number ($accountNumber) copied!")
+              onCopied("Account Number ($accountNumber) copied!")
             },
             colors = ButtonDefaults.buttonColors(containerColor = JyRoyalBlue),
             shape = RoundedCornerShape(10.dp),
@@ -168,15 +313,208 @@ fun OfficialOpayBankCard(
           ) {
             Icon(Icons.Filled.ContentCopy, contentDescription = "Copy account number", modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(6.dp))
-            Text("COPY ACCOUNT NUMBER", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+            Text("Copy Number", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
           }
         }
       }
+
       Text(
         instructions,
         style = MaterialTheme.typography.bodySmall,
         color = JyDeepNavy.copy(alpha = 0.85f),
       )
+
+      if (showLaunchBankButton) {
+        OutlinedButton(
+          onClick = { launchOpayOrBankApp(context, onCopied) },
+          modifier = Modifier.fillMaxWidth().testTag("open_opay_app_button"),
+          shape = RoundedCornerShape(12.dp),
+        ) {
+          Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Open OPay / Bank App to Pay", fontWeight = FontWeight.SemiBold)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+fun OfficialContactCard(
+  settings: InstitutionSettings,
+  onNotify: (String) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val context = LocalContext.current
+  val primaryPhone = settings.contactPhone.ifBlank { JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE }
+  val altPhone = settings.alternativePhone.ifBlank { JyCatalogDefaults.OFFICIAL_ALT_PHONE }
+  val whatsappPhone = settings.whatsappNumber.ifBlank { JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE }
+  val email = settings.email.ifBlank { JyCatalogDefaults.OFFICIAL_EMAIL }
+  val website = settings.website.ifBlank { JyCatalogDefaults.OFFICIAL_WEBSITE }
+  val address = settings.physicalAddress.ifBlank { JyCatalogDefaults.OFFICIAL_ADDRESS }
+  val slogan = settings.slogan.ifBlank { JyCatalogDefaults.OFFICIAL_SLOGAN }
+
+  Card(
+    shape = RoundedCornerShape(18.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+    modifier = modifier.fillMaxWidth(),
+  ) {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        OfficialJyLogoBadge(size = 56.dp, cornerRadius = 12.dp)
+        Spacer(modifier = Modifier.width(12.dp))
+        Column {
+          Text(
+            settings.institutionName.ifBlank { "JY-COMPUTERS" },
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+          )
+          Text(
+            slogan,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+      }
+
+      HorizontalDivider()
+
+      Row(verticalAlignment = Alignment.Top) {
+        Icon(Icons.Filled.LocationOn, contentDescription = "Address", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(address, style = MaterialTheme.typography.bodySmall)
+      }
+
+      Text(
+        "Primary Contact: $primaryPhone (Calls & WhatsApp)",
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Bold,
+      )
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+          onClick = { launchDialer(context, primaryPhone, onNotify) },
+          modifier = Modifier.weight(1f).testTag("contact_call_primary_button"),
+          shape = RoundedCornerShape(12.dp),
+        ) {
+          Icon(Icons.Filled.Call, contentDescription = "Call $primaryPhone", modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Call $primaryPhone", maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Button(
+          onClick = { launchWhatsApp(context, whatsappPhone, onNotify) },
+          colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A)),
+          modifier = Modifier.weight(1f).testTag("contact_whatsapp_button"),
+          shape = RoundedCornerShape(12.dp),
+        ) {
+          Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "WhatsApp $primaryPhone", modifier = Modifier.size(18.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("WhatsApp", maxLines = 1)
+        }
+      }
+
+      OutlinedButton(
+        onClick = { launchDialer(context, altPhone, onNotify) },
+        modifier = Modifier.fillMaxWidth().testTag("contact_call_alt_button"),
+        shape = RoundedCornerShape(12.dp),
+      ) {
+        Icon(Icons.Filled.Call, contentDescription = "Call alternative number", modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("Call Alternative Line: $altPhone")
+      }
+
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+          onClick = { launchEmail(context, email, onNotify) },
+          modifier = Modifier.weight(1f).testTag("contact_email_button"),
+          shape = RoundedCornerShape(12.dp),
+        ) {
+          Icon(Icons.Filled.Email, contentDescription = "Email", modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(email, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
+        }
+        OutlinedButton(
+          onClick = { launchWebsite(context, website, onNotify) },
+          modifier = Modifier.weight(1f).testTag("contact_website_button"),
+          shape = RoundedCornerShape(12.dp),
+        ) {
+          Icon(Icons.Filled.Language, contentDescription = "Website", modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(website, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+fun JyBusinessFooter(
+  settings: InstitutionSettings,
+  onNotify: (String) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val context = LocalContext.current
+  val primaryPhone = settings.contactPhone.ifBlank { JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE }
+  val altPhone = settings.alternativePhone.ifBlank { JyCatalogDefaults.OFFICIAL_ALT_PHONE }
+  val whatsappPhone = settings.whatsappNumber.ifBlank { JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE }
+  val email = settings.email.ifBlank { JyCatalogDefaults.OFFICIAL_EMAIL }
+  val website = settings.website.ifBlank { JyCatalogDefaults.OFFICIAL_WEBSITE }
+  val address = settings.physicalAddress.ifBlank { JyCatalogDefaults.OFFICIAL_ADDRESS }
+  val slogan = settings.slogan.ifBlank { JyCatalogDefaults.OFFICIAL_SLOGAN }
+
+  Card(
+    shape = RoundedCornerShape(16.dp),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)),
+    modifier = modifier.fillMaxWidth(),
+  ) {
+    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Text(
+        "${settings.institutionName.ifBlank { "JY-COMPUTERS" }} — $slogan",
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.primary,
+      )
+      Text(address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+      Text(
+        "Primary: $primaryPhone • Alt: $altPhone • $email • $website",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(
+          onClick = { launchDialer(context, primaryPhone, onNotify) },
+          modifier = Modifier.testTag("footer_call_primary_button"),
+        ) {
+          Icon(Icons.Filled.Call, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Call", style = MaterialTheme.typography.labelMedium)
+        }
+        TextButton(
+          onClick = { launchWhatsApp(context, whatsappPhone, onNotify) },
+          modifier = Modifier.testTag("footer_whatsapp_button"),
+        ) {
+          Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("WhatsApp", style = MaterialTheme.typography.labelMedium)
+        }
+        TextButton(
+          onClick = { launchDialer(context, altPhone, onNotify) },
+          modifier = Modifier.testTag("footer_call_alt_button"),
+        ) {
+          Icon(Icons.Filled.Call, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Alt Line", style = MaterialTheme.typography.labelMedium)
+        }
+        TextButton(
+          onClick = { launchWebsite(context, website, onNotify) },
+          modifier = Modifier.testTag("footer_website_button"),
+        ) {
+          Icon(Icons.Filled.Language, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Web", style = MaterialTheme.typography.labelMedium)
+        }
+      }
     }
   }
 }

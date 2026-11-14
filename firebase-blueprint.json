@@ -7,14 +7,20 @@
       "properties": {
         "institutionName": { "type": "string", "description": "Name of the institution" },
         "motto": { "type": "string", "description": "Institution motto or tagline" },
-        "contactPhone": { "type": "string", "description": "Contact phone numbers" },
+        "slogan": { "type": "string", "description": "Official business slogan" },
+        "contactPhone": { "type": "string", "description": "Primary contact phone number" },
+        "alternativePhone": { "type": "string", "description": "Alternative contact phone number" },
+        "whatsappNumber": { "type": "string", "description": "WhatsApp business phone number" },
         "email": { "type": "string", "description": "Official contact email" },
+        "website": { "type": "string", "description": "Official website URL" },
         "physicalAddress": { "type": "string", "description": "Campus physical address" },
         "opayBankName": { "type": "string", "description": "Bank name (OPay)" },
         "opayAccountName": { "type": "string", "description": "OPay account name" },
         "opayAccountNumber": { "type": "string", "description": "OPay 10-digit account number" },
-        "opayInstructions": { "type": "string", "description": "Transfer instructions for students" },
+        "opayInstructions": { "type": "string", "description": "Transfer instructions for students and customers" },
         "onlinePaymentUrl": { "type": "string", "description": "Configured public checkout URL" },
+        "paymentsEnabled": { "type": "boolean", "description": "Global payment toggle controlled by Admin" },
+        "allowPartialPayment": { "type": "boolean", "description": "Global partial payment toggle" },
         "activeSession": { "type": "string", "description": "Active academic session" },
         "signatoryName": { "type": "string", "description": "Authorized certificate signatory name" },
         "signatoryTitle": { "type": "string", "description": "Authorized certificate signatory title" },
@@ -138,29 +144,95 @@
       },
       "required": ["userId", "studentName", "studentIdNumber", "programmeId", "programmeTitle", "session", "totalFeeNaira", "amountPaidNaira", "status", "createdAt", "updatedAt"]
     },
+    "JyServiceItem": {
+      "title": "JyServiceItem",
+      "description": "JY-COMPUTERS training or ICT service eligible for universal checkout.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "defaultFeeNaira": { "type": "integer" },
+        "paymentEnabled": { "type": "boolean" },
+        "allowPartialPayment": { "type": "boolean" },
+        "isTrainingCourse": { "type": "boolean" },
+        "linkedProgrammeId": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "category", "defaultFeeNaira", "paymentEnabled", "allowPartialPayment", "active", "createdAt", "updatedAt"]
+    },
+    "ServiceRequest": {
+      "title": "ServiceRequest",
+      "description": "Customer or student service request with auto-generated invoice and balance ledger.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "customerEmail": { "type": "string" },
+        "customerRegNumber": { "type": "string" },
+        "requestNumber": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "serviceId": { "type": "string" },
+        "serviceTitle": { "type": "string" },
+        "serviceCategory": { "type": "string" },
+        "details": { "type": "string" },
+        "totalFeeNaira": { "type": "integer" },
+        "amountPaidNaira": { "type": "integer" },
+        "paymentStatus": { "type": "string", "enum": ["unpaid", "partial", "paid"] },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"] },
+        "adminNotes": { "type": "string" },
+        "invoiceDate": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "customerName", "requestNumber", "invoiceNumber", "serviceId", "serviceTitle", "serviceCategory", "totalFeeNaira", "amountPaidNaira", "paymentStatus", "status", "createdAt", "updatedAt"]
+    },
+    "PaymentReference": {
+      "title": "PaymentReference",
+      "description": "Unique registry of approved transaction references preventing duplicate payment verification.",
+      "type": "object",
+      "properties": {
+        "referenceNormalized": { "type": "string" },
+        "paymentId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["referenceNormalized", "paymentId", "createdAt"]
+    },
     "Payment": {
       "title": "Payment",
-      "description": "Tuition payment transaction (online gateway or manual OPay transfer).",
+      "description": "Universal course tuition or ICT service payment transaction.",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
         "studentName": { "type": "string" },
         "studentIdNumber": { "type": "string" },
         "enrollmentId": { "type": "string" },
+        "serviceRequestId": { "type": "string" },
+        "requestNumber": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
         "programmeId": { "type": "string" },
         "programmeTitle": { "type": "string" },
+        "serviceCategory": { "type": "string" },
         "amountNaira": { "type": "integer" },
-        "method": { "type": "string", "enum": ["online_gateway", "opay_transfer", "cash"] },
+        "method": { "type": "string", "enum": ["online_gateway", "opay_transfer", "bank_transfer", "cash"] },
         "reference": { "type": "string" },
+        "referenceNormalized": { "type": "string" },
         "paymentDate": { "type": "string" },
         "senderName": { "type": "string" },
+        "senderBank": { "type": "string" },
         "evidenceBase64": { "type": "string" },
         "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
         "adminRemarks": { "type": "string" },
+        "verifiedByUid": { "type": "string" },
+        "verifiedByName": { "type": "string" },
+        "verifiedAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["userId", "studentName", "studentIdNumber", "enrollmentId", "programmeId", "programmeTitle", "amountNaira", "method", "reference", "status", "createdAt", "updatedAt"]
+      "required": ["userId", "studentName", "studentIdNumber", "programmeTitle", "amountNaira", "method", "reference", "status", "createdAt", "updatedAt"]
     },
     "AttendanceRecord": {
       "title": "AttendanceRecord",
@@ -424,6 +496,18 @@
     "/users/{uid}/blocked_users/{blockedUid}": {
       "schema": { "$ref": "#/entities/BlockedUser" },
       "description": "Per-user blocked users list."
+    },
+    "/services/{serviceId}": {
+      "schema": { "$ref": "#/entities/JyServiceItem" },
+      "description": "Universal catalog of JY-COMPUTERS courses and ICT services."
+    },
+    "/service_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/ServiceRequest" },
+      "description": "Customer and student service requests with invoice balances."
+    },
+    "/payment_references/{refKey}": {
+      "schema": { "$ref": "#/entities/PaymentReference" },
+      "description": "Unique registry preventing duplicate transaction reference verification."
     },
     "/activity_logs/{logId}": {
       "schema": { "$ref": "#/entities/ActivityLog" },

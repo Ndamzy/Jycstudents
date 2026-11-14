@@ -23,13 +23,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -39,6 +37,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -59,17 +58,18 @@ import com.example.data.model.Enrollment
 import com.example.data.model.InstitutionSettings
 import com.example.data.model.JyCatalogDefaults
 import com.example.data.model.Payment
+import com.example.data.model.ServiceRequest
 import com.example.data.model.UserProfile
 import com.example.ui.components.Base64Avatar
+import com.example.ui.components.JyBusinessFooter
 import com.example.ui.components.JyGradientHeaderCard
-import com.example.ui.components.OfficialJyLogoBadge
+import com.example.ui.components.OfficialContactCard
 import com.example.ui.components.OfficialOpayBankCard
 import com.example.ui.components.PassportCameraCaptureDialog
 import com.example.ui.components.SectionHeader
 import com.example.util.AppThemeMode
 import com.example.util.ExportAndPdfUtil
 import com.example.util.ImageCompressionUtil
-import java.util.Date
 import kotlinx.coroutines.launch
 
 @Composable
@@ -278,38 +278,9 @@ fun AboutAndContactCard(
   settings: InstitutionSettings,
   onNotify: (String) -> Unit,
 ) {
-  Card(
-    modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(18.dp),
-    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-  ) {
-    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        OfficialJyLogoBadge(size = 64.dp, cornerRadius = 12.dp)
-        Spacer(modifier = Modifier.width(12.dp))
-        Column {
-          Text("About & Contact", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-          Text(settings.institutionName, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-          Text(settings.motto, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-      }
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Filled.LocationOn, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(settings.physicalAddress, style = MaterialTheme.typography.bodySmall)
-      }
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Filled.Phone, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(settings.contactPhone, style = MaterialTheme.typography.bodySmall)
-      }
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Filled.Email, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(settings.email, style = MaterialTheme.typography.bodySmall)
-      }
-      OfficialOpayBankCard(settings = settings, onCopied = onNotify)
-    }
+  Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    OfficialContactCard(settings = settings, onNotify = onNotify)
+    OfficialOpayBankCard(settings = settings, onCopied = onNotify)
   }
 }
 
@@ -327,18 +298,25 @@ fun AdminSettingsScreen(
   isBusy: Boolean,
   onSaveSettings: (InstitutionSettings) -> Unit,
   onSeedDefaults: () -> Unit,
+  onOpenServices: () -> Unit = {},
   onNotify: (String) -> Unit,
 ) {
   var name by remember(settings) { mutableStateOf(settings.institutionName) }
   var motto by remember(settings) { mutableStateOf(settings.motto) }
-  var phone by remember(settings) { mutableStateOf(settings.contactPhone) }
-  var email by remember(settings) { mutableStateOf(settings.email) }
-  var address by remember(settings) { mutableStateOf(settings.physicalAddress) }
-  var opayBank by remember(settings) { mutableStateOf(settings.opayBankName) }
-  var opayAccName by remember(settings) { mutableStateOf(settings.opayAccountName) }
-  var opayAccNum by remember(settings) { mutableStateOf(settings.opayAccountNumber) }
-  var opayInstr by remember(settings) { mutableStateOf(settings.opayInstructions) }
+  var slogan by remember(settings) { mutableStateOf(settings.slogan.ifBlank { JyCatalogDefaults.OFFICIAL_SLOGAN }) }
+  var phone by remember(settings) { mutableStateOf(settings.contactPhone.ifBlank { JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE }) }
+  var altPhone by remember(settings) { mutableStateOf(settings.alternativePhone.ifBlank { JyCatalogDefaults.OFFICIAL_ALT_PHONE }) }
+  var whatsapp by remember(settings) { mutableStateOf(settings.whatsappNumber.ifBlank { JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE }) }
+  var email by remember(settings) { mutableStateOf(settings.email.ifBlank { JyCatalogDefaults.OFFICIAL_EMAIL }) }
+  var website by remember(settings) { mutableStateOf(settings.website.ifBlank { JyCatalogDefaults.OFFICIAL_WEBSITE }) }
+  var address by remember(settings) { mutableStateOf(settings.physicalAddress.ifBlank { JyCatalogDefaults.OFFICIAL_ADDRESS }) }
+  var opayBank by remember(settings) { mutableStateOf(settings.opayBankName.ifBlank { JyCatalogDefaults.OFFICIAL_OPAY_BANK }) }
+  var opayAccName by remember(settings) { mutableStateOf(settings.opayAccountName.ifBlank { JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NAME }) }
+  var opayAccNum by remember(settings) { mutableStateOf(settings.opayAccountNumber.ifBlank { JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NUMBER }) }
+  var opayInstr by remember(settings) { mutableStateOf(settings.opayInstructions.ifBlank { JyCatalogDefaults.OFFICIAL_OPAY_INSTRUCTIONS }) }
   var onlineUrl by remember(settings) { mutableStateOf(settings.onlinePaymentUrl) }
+  var paymentsEnabled by remember(settings) { mutableStateOf(settings.paymentsEnabled) }
+  var allowPartial by remember(settings) { mutableStateOf(settings.allowPartialPayment) }
   var session by remember(settings) { mutableStateOf(settings.activeSession) }
   var sigName by remember(settings) { mutableStateOf(settings.signatoryName) }
   var sigTitle by remember(settings) { mutableStateOf(settings.signatoryTitle) }
@@ -350,20 +328,60 @@ fun AdminSettingsScreen(
   ) {
     AboutAndContactCard(settings = settings, onNotify = onNotify)
 
-    SectionHeader("Institution & Branding")
+    SectionHeader("Institution & Official Contact Details")
     OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Institution Name") }, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(value = slogan, onValueChange = { slogan = it }, label = { Text("Business Slogan") }, modifier = Modifier.fillMaxWidth())
     OutlinedTextField(value = motto, onValueChange = { motto = it }, label = { Text("Motto / Tagline") }, modifier = Modifier.fillMaxWidth())
-    OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Contact Phone Numbers") }, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Primary Contact Number (Calls & WhatsApp)") }, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(value = altPhone, onValueChange = { altPhone = it }, label = { Text("Alternative Contact Number (Calls)") }, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(value = whatsapp, onValueChange = { whatsapp = it }, label = { Text("WhatsApp Contact Number") }, modifier = Modifier.fillMaxWidth())
     OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Official Email") }, modifier = Modifier.fillMaxWidth())
-    OutlinedTextField(value = address, onValueChange = { address = it }, label = { Text("Physical Address") }, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(value = website, onValueChange = { website = it }, label = { Text("Official Website") }, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(value = address, onValueChange = { address = it }, label = { Text("Business Address") }, modifier = Modifier.fillMaxWidth())
     OutlinedTextField(value = session, onValueChange = { session = it }, label = { Text("Active Academic Session") }, modifier = Modifier.fillMaxWidth())
 
-    SectionHeader("OPay & Online Payment Configuration")
+    SectionHeader("Central Business Payment Settings")
     OutlinedTextField(value = opayBank, onValueChange = { opayBank = it }, label = { Text("Bank Name") }, modifier = Modifier.fillMaxWidth())
-    OutlinedTextField(value = opayAccName, onValueChange = { opayAccName = it }, label = { Text("OPay Account Name") }, modifier = Modifier.fillMaxWidth())
-    OutlinedTextField(value = opayAccNum, onValueChange = { opayAccNum = it }, label = { Text("OPay Account Number") }, modifier = Modifier.fillMaxWidth())
-    OutlinedTextField(value = opayInstr, onValueChange = { opayInstr = it }, label = { Text("Transfer Instructions") }, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(value = opayAccName, onValueChange = { opayAccName = it }, label = { Text("Account Name") }, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(value = opayAccNum, onValueChange = { opayAccNum = it }, label = { Text("Account Number") }, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(value = opayInstr, onValueChange = { opayInstr = it }, label = { Text("Payment Instructions") }, modifier = Modifier.fillMaxWidth())
     OutlinedTextField(value = onlineUrl, onValueChange = { onlineUrl = it }, label = { Text("Online Checkout URL (Optional Public Link)") }, modifier = Modifier.fillMaxWidth())
+
+    Card(
+      shape = RoundedCornerShape(14.dp),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+      modifier = Modifier.fillMaxWidth(),
+    ) {
+      Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text("Enable App Payments", fontWeight = FontWeight.SemiBold)
+            Text("Allow customers & students to submit payments in app", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          }
+          Switch(checked = paymentsEnabled, onCheckedChange = { paymentsEnabled = it })
+        }
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text("Allow Partial Payments", fontWeight = FontWeight.SemiBold)
+            Text("Permit instalment payments where allowed by the service", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          }
+          Switch(checked = allowPartial, onCheckedChange = { allowPartial = it })
+        }
+        OutlinedButton(onClick = onOpenServices, modifier = Modifier.fillMaxWidth()) {
+          Icon(Icons.Filled.Storefront, contentDescription = null)
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Manage Service Fees & Payment Toggles")
+        }
+      }
+    }
 
     SectionHeader("Certificate Signatory")
     OutlinedTextField(value = sigName, onValueChange = { sigName = it }, label = { Text("Authorized Signatory Name") }, modifier = Modifier.fillMaxWidth())
@@ -375,14 +393,20 @@ fun AdminSettingsScreen(
           settings.copy(
             institutionName = name,
             motto = motto,
+            slogan = slogan,
             contactPhone = phone,
+            alternativePhone = altPhone,
+            whatsappNumber = whatsapp,
             email = email,
+            website = website,
             physicalAddress = address,
             opayBankName = opayBank,
             opayAccountName = opayAccName,
             opayAccountNumber = opayAccNum,
             opayInstructions = opayInstr,
             onlinePaymentUrl = onlineUrl,
+            paymentsEnabled = paymentsEnabled,
+            allowPartialPayment = allowPartial,
             activeSession = session,
             signatoryName = sigName,
             signatoryTitle = sigTitle,
@@ -394,7 +418,7 @@ fun AdminSettingsScreen(
     ) {
       Icon(Icons.Filled.Save, contentDescription = null)
       Spacer(modifier = Modifier.width(8.dp))
-      Text("Save Institutional Settings")
+      Text("Save Institutional & Payment Settings")
     }
 
     OutlinedButton(
@@ -404,7 +428,7 @@ fun AdminSettingsScreen(
     ) {
       Icon(Icons.Filled.Settings, contentDescription = null)
       Spacer(modifier = Modifier.width(8.dp))
-      Text("Initialize Default 9 Programmes & Community Chat")
+      Text("Initialize Default Programmes, Services & Chat")
     }
     Spacer(modifier = Modifier.height(24.dp))
   }
@@ -416,9 +440,11 @@ fun ReportsAndAnalyticsScreen(
   allUsers: List<UserProfile>,
   enrollments: List<Enrollment>,
   payments: List<Payment>,
+  serviceRequests: List<ServiceRequest> = emptyList(),
   attendance: List<AttendanceRecord>,
   results: List<AcademicResult>,
   certificates: List<Certificate>,
+  onNotify: (String) -> Unit = {},
 ) {
   val context = LocalContext.current
   val reportTypes =
@@ -427,6 +453,8 @@ fun ReportsAndAnalyticsScreen(
       "Active Students",
       "Graduated Students",
       "Course Enrolment",
+      "Service Requests & Invoices",
+      "Revenue by Service Category",
       "Payment Records",
       "Outstanding Balances",
       "Attendance Report",
@@ -452,7 +480,7 @@ fun ReportsAndAnalyticsScreen(
   val students = remember(allUsers) { allUsers.filter { it.role == "student" || it.studentIdNumber.isNotBlank() } }
 
   val (headers, rows) =
-    remember(selectedReport, selectedPeriod, students, enrollments, payments, attendance, results, certificates) {
+    remember(selectedReport, selectedPeriod, students, enrollments, payments, serviceRequests, attendance, results, certificates) {
       when (selectedReport) {
         "Student Registration" ->
           listOf("Reg No", "Full Name", "Course", "Level", "Approval") to
@@ -474,23 +502,58 @@ fun ReportsAndAnalyticsScreen(
             enrollments.filter { inSelectedPeriod(it.createdAt?.seconds) }.map {
               listOf(it.studentName, it.programmeTitle, it.session, it.status)
             }
+        "Service Requests & Invoices" ->
+          listOf("Invoice", "Client", "Service", "Status", "Balance") to
+            serviceRequests.filter { inSelectedPeriod(it.createdAt?.seconds) }.map {
+              listOf(
+                it.invoiceNumber,
+                it.customerName,
+                it.serviceTitle,
+                it.paymentStatus,
+                JyCatalogDefaults.formatNaira(it.outstandingNaira),
+              )
+            }
+        "Revenue by Service Category" -> {
+          val approved = payments.filter { it.status == "approved" && inSelectedPeriod(it.createdAt?.seconds) }
+          listOf("Category", "Confirmed", "Revenue") to
+            JyCatalogDefaults.SERVICE_CATEGORIES.map { cat ->
+              val catPays = approved.filter { it.serviceCategory.equals(cat, ignoreCase = true) }
+              listOf(
+                cat,
+                catPays.size.toString(),
+                JyCatalogDefaults.formatNaira(catPays.sumOf { it.amountNaira }),
+              )
+            }
+        }
         "Payment Records" ->
-          listOf("Reference", "Student", "Amount", "Method", "Status") to
+          listOf("Reference", "Client", "Service", "Amount", "Status") to
             payments.filter { inSelectedPeriod(it.createdAt?.seconds) }.map {
-              listOf(it.reference, it.studentName, JyCatalogDefaults.formatNaira(it.amountNaira), it.method, it.status)
+              listOf(it.reference, it.studentName, it.programmeTitle, JyCatalogDefaults.formatNaira(it.amountNaira), it.status)
             }
         "Outstanding Balances" ->
-          listOf("Student", "Course", "Fee", "Balance") to
-            enrollments
-              .filter { it.outstandingNaira > 0 && inSelectedPeriod(it.createdAt?.seconds) }
-              .map {
-                listOf(
-                  it.studentName,
-                  it.programmeTitle,
-                  JyCatalogDefaults.formatNaira(it.totalFeeNaira),
-                  JyCatalogDefaults.formatNaira(it.outstandingNaira),
-                )
-              }
+          listOf("Customer", "Item", "Fee", "Balance") to
+            (
+              enrollments
+                .filter { it.outstandingNaira > 0 && inSelectedPeriod(it.createdAt?.seconds) }
+                .map {
+                  listOf(
+                    it.studentName,
+                    it.programmeTitle,
+                    JyCatalogDefaults.formatNaira(it.totalFeeNaira),
+                    JyCatalogDefaults.formatNaira(it.outstandingNaira),
+                  )
+                } +
+                serviceRequests
+                  .filter { it.outstandingNaira > 0 && inSelectedPeriod(it.createdAt?.seconds) }
+                  .map {
+                    listOf(
+                      it.customerName,
+                      it.serviceTitle,
+                      JyCatalogDefaults.formatNaira(it.totalFeeNaira),
+                      JyCatalogDefaults.formatNaira(it.outstandingNaira),
+                    )
+                  }
+              )
         "Attendance Report" ->
           listOf("Date", "Student", "Course", "Status") to
             attendance.filter { inSelectedPeriod(it.createdAt?.seconds) }.map {
@@ -602,6 +665,10 @@ fun ReportsAndAnalyticsScreen(
           }
         }
       }
+    }
+
+    item {
+      JyBusinessFooter(settings = settings, onNotify = onNotify)
     }
   }
 }

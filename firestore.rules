@@ -33,14 +33,20 @@ service cloud.firestore {
     function isValidInstitutionSettings(data) {
       return data.institutionName is string && data.institutionName.size() >= 2 && data.institutionName.size() <= 120 &&
              (!('motto' in data) || (data.motto is string && data.motto.size() <= 200)) &&
+             (!('slogan' in data) || (data.slogan is string && data.slogan.size() <= 200)) &&
              (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 60)) &&
+             (!('alternativePhone' in data) || (data.alternativePhone is string && data.alternativePhone.size() <= 60)) &&
+             (!('whatsappNumber' in data) || (data.whatsappNumber is string && data.whatsappNumber.size() <= 60)) &&
              (!('email' in data) || (data.email is string && data.email.size() <= 120)) &&
+             (!('website' in data) || (data.website is string && data.website.size() <= 160)) &&
              (!('physicalAddress' in data) || (data.physicalAddress is string && data.physicalAddress.size() <= 250)) &&
              (!('opayBankName' in data) || (data.opayBankName is string && data.opayBankName.size() <= 60)) &&
              data.opayAccountName is string && data.opayAccountName.size() >= 2 && data.opayAccountName.size() <= 120 &&
              data.opayAccountNumber is string && data.opayAccountNumber.size() >= 6 && data.opayAccountNumber.size() <= 30 &&
              (!('opayInstructions' in data) || (data.opayInstructions is string && data.opayInstructions.size() <= 500)) &&
              (!('onlinePaymentUrl' in data) || (data.onlinePaymentUrl is string && data.onlinePaymentUrl.size() <= 300)) &&
+             (!('paymentsEnabled' in data) || data.paymentsEnabled is bool) &&
+             (!('allowPartialPayment' in data) || data.allowPartialPayment is bool) &&
              data.activeSession is string && data.activeSession.size() >= 2 && data.activeSession.size() <= 40 &&
              (!('signatoryName' in data) || (data.signatoryName is string && data.signatoryName.size() <= 120)) &&
              (!('signatoryTitle' in data) || (data.signatoryTitle is string && data.signatoryTitle.size() <= 120)) &&
@@ -134,21 +140,73 @@ service cloud.firestore {
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
+    function isValidJyService(data) {
+      return data.title is string && data.title.size() >= 2 && data.title.size() <= 120 &&
+             data.category is string && data.category.size() >= 2 && data.category.size() <= 80 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 600)) &&
+             data.defaultFeeNaira is int && data.defaultFeeNaira >= 0 && data.defaultFeeNaira <= 50000000 &&
+             data.paymentEnabled is bool &&
+             data.allowPartialPayment is bool &&
+             (!('isTrainingCourse' in data) || data.isTrainingCourse is bool) &&
+             (!('linkedProgrammeId' in data) || (data.linkedProgrammeId is string && data.linkedProgrammeId.size() <= 128)) &&
+             data.active is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidServiceRequest(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 120 &&
+             (!('customerPhone' in data) || (data.customerPhone is string && data.customerPhone.size() <= 40)) &&
+             (!('customerEmail' in data) || (data.customerEmail is string && data.customerEmail.size() <= 120)) &&
+             (!('customerRegNumber' in data) || (data.customerRegNumber is string && data.customerRegNumber.size() <= 40)) &&
+             data.requestNumber is string && data.requestNumber.size() >= 4 && data.requestNumber.size() <= 40 &&
+             data.invoiceNumber is string && data.invoiceNumber.size() >= 4 && data.invoiceNumber.size() <= 40 &&
+             data.serviceId is string && data.serviceId.size() >= 1 && data.serviceId.size() <= 128 &&
+             data.serviceTitle is string && data.serviceTitle.size() >= 2 && data.serviceTitle.size() <= 120 &&
+             data.serviceCategory is string && data.serviceCategory.size() >= 2 && data.serviceCategory.size() <= 80 &&
+             (!('details' in data) || (data.details is string && data.details.size() <= 1000)) &&
+             data.totalFeeNaira is int && data.totalFeeNaira >= 0 && data.totalFeeNaira <= 50000000 &&
+             data.amountPaidNaira is int && data.amountPaidNaira >= 0 && data.amountPaidNaira <= 50000000 &&
+             data.paymentStatus in ['unpaid', 'partial', 'paid'] &&
+             data.status in ['pending', 'in_progress', 'completed', 'cancelled'] &&
+             (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 400)) &&
+             (!('invoiceDate' in data) || (data.invoiceDate is string && data.invoiceDate.size() <= 40)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidPaymentReference(data) {
+      return data.referenceNormalized is string && data.referenceNormalized.size() >= 4 && data.referenceNormalized.size() <= 100 &&
+             data.paymentId is string && data.paymentId.size() >= 1 && data.paymentId.size() <= 128 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
     function isValidPayment(data) {
       return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
              data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 120 &&
              data.studentIdNumber is string && data.studentIdNumber.size() >= 2 && data.studentIdNumber.size() <= 40 &&
-             data.enrollmentId is string && data.enrollmentId.size() >= 1 && data.enrollmentId.size() <= 128 &&
-             data.programmeId is string && data.programmeId.size() >= 1 && data.programmeId.size() <= 128 &&
+             data.enrollmentId is string && data.enrollmentId.size() <= 128 &&
+             (!('serviceRequestId' in data) || (data.serviceRequestId is string && data.serviceRequestId.size() <= 128)) &&
+             (data.enrollmentId.size() >= 1 || ('serviceRequestId' in data && data.serviceRequestId.size() >= 1)) &&
+             (!('requestNumber' in data) || (data.requestNumber is string && data.requestNumber.size() <= 40)) &&
+             (!('invoiceNumber' in data) || (data.invoiceNumber is string && data.invoiceNumber.size() <= 40)) &&
+             data.programmeId is string && data.programmeId.size() <= 128 &&
              data.programmeTitle is string && data.programmeTitle.size() >= 2 && data.programmeTitle.size() <= 120 &&
+             (!('serviceCategory' in data) || (data.serviceCategory is string && data.serviceCategory.size() <= 80)) &&
              data.amountNaira is int && data.amountNaira > 0 && data.amountNaira <= 50000000 &&
-             data.method in ['online_gateway', 'opay_transfer', 'cash'] &&
+             data.method in ['online_gateway', 'opay_transfer', 'bank_transfer', 'cash'] &&
              data.reference is string && data.reference.size() >= 4 && data.reference.size() <= 100 &&
+             (!('referenceNormalized' in data) || (data.referenceNormalized is string && data.referenceNormalized.size() <= 100)) &&
              (!('paymentDate' in data) || (data.paymentDate is string && data.paymentDate.size() <= 40)) &&
              (!('senderName' in data) || (data.senderName is string && data.senderName.size() <= 120)) &&
+             (!('senderBank' in data) || (data.senderBank is string && data.senderBank.size() <= 80)) &&
              (!('evidenceBase64' in data) || (data.evidenceBase64 is string && data.evidenceBase64.size() <= 350000)) &&
              data.status in ['pending', 'approved', 'rejected'] &&
              (!('adminRemarks' in data) || (data.adminRemarks is string && data.adminRemarks.size() <= 300)) &&
+             (!('verifiedByUid' in data) || (data.verifiedByUid is string && data.verifiedByUid.size() <= 128)) &&
+             (!('verifiedByName' in data) || (data.verifiedByName is string && data.verifiedByName.size() <= 120)) &&
+             (!('verifiedAt' in data) || data.verifiedAt == null || (data.verifiedAt is timestamp && data.verifiedAt <= request.time)) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -421,12 +479,47 @@ service cloud.firestore {
       );
       allow create: if isSignedIn() && isValidId(paymentId) && isValidPayment(incoming()) && (
         isAdmin() ||
-        (incoming().userId == request.auth.uid && incoming().status == 'pending' && incoming().method in ['online_gateway', 'opay_transfer'])
+        (incoming().userId == request.auth.uid && incoming().status == 'pending' && incoming().method in ['online_gateway', 'opay_transfer', 'bank_transfer'])
       );
       allow update: if isSignedIn() && isValidId(paymentId) && isValidPayment(incoming()) &&
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt && isAdmin();
       allow delete: if isAdmin() && isValidId(paymentId);
+    }
+
+    match /payment_references/{refKey} {
+      allow get: if isSignedIn() && isValidId(refKey);
+      allow list: if isAdmin();
+      allow create: if isAdmin() && isValidId(refKey) && isValidPaymentReference(incoming());
+      allow update, delete: if false;
+    }
+
+    match /services/{serviceId} {
+      allow get: if isSignedIn() && isValidId(serviceId);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && isValidId(serviceId) && isValidJyService(incoming());
+      allow update: if isAdmin() && isValidId(serviceId) && isValidJyService(incoming()) && incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(serviceId);
+    }
+
+    match /service_requests/{requestId} {
+      allow get: if isSignedIn() && isValidId(requestId) && (
+        existing().userId == request.auth.uid || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        existing().userId == request.auth.uid || isAdmin()
+      );
+      allow create: if isSignedIn() && isValidId(requestId) && isValidServiceRequest(incoming()) && (
+        isAdmin() ||
+        (incoming().userId == request.auth.uid &&
+         incoming().amountPaidNaira == 0 &&
+         incoming().paymentStatus == 'unpaid' &&
+         incoming().status == 'pending')
+      );
+      allow update: if isSignedIn() && isValidId(requestId) && isValidServiceRequest(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt && isAdmin();
+      allow delete: if isAdmin() && isValidId(requestId);
     }
 
     match /attendance/{attendanceId} {

@@ -26,6 +26,8 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.AlertDialog
@@ -69,6 +71,7 @@ import com.example.data.model.LearningMaterial
 import com.example.data.model.Programme
 import com.example.data.model.UserProfile
 import com.example.ui.components.EmptyStateCard
+import com.example.ui.components.JyBusinessFooter
 import com.example.ui.components.OfficialOpayBankCard
 import com.example.ui.components.SectionHeader
 import com.example.ui.components.StatusPill
@@ -76,6 +79,10 @@ import com.example.ui.theme.JyCrimson
 import com.example.ui.theme.JyCrimsonContainer
 import com.example.ui.theme.JyEmerald
 import com.example.ui.theme.JyEmeraldContainer
+import com.example.util.ExportAndPdfUtil
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun CourseCatalogueScreen(
@@ -373,8 +380,9 @@ fun CourseRegistrationScreen(
   onAssignStudentToCourse: (UserProfile, Programme) -> Unit,
   onUpdateEnrollmentStatus: (String, String) -> Unit,
   onNotify: (String) -> Unit,
-  onGoToPayment: () -> Unit,
+  onGoToPayment: (Enrollment) -> Unit,
 ) {
+  val context = LocalContext.current
   val isAdmin = activeRole == "admin"
   val enrolledIds = remember(enrollments) { enrollments.map { it.programmeId }.toSet() }
   val students = remember(allUsers) { allUsers.filter { it.role == "student" || it.studentIdNumber.isNotBlank() } }
@@ -498,6 +506,45 @@ fun CourseRegistrationScreen(
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              OutlinedButton(
+                onClick = {
+                  val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+                  val inv = "INV-TRN-${enr.id.take(6).uppercase()}"
+                  val pdf =
+                    ExportAndPdfUtil.generateInvoicePdf(
+                      context = context,
+                      customerName = enr.studentName,
+                      customerPhone = "",
+                      invoiceNumber = inv,
+                      serviceTitle = enr.programmeTitle,
+                      serviceCategory = "Training Courses",
+                      requestNumber = enr.studentIdNumber,
+                      totalFeeNaira = enr.totalFeeNaira,
+                      amountPaidNaira = enr.amountPaidNaira,
+                      invoiceDate = today,
+                      settings = settings,
+                    )
+                  ExportAndPdfUtil.shareFile(context, pdf, "application/pdf", "Share Tuition Invoice")
+                },
+                modifier = Modifier.weight(1f),
+              ) {
+                Icon(Icons.Filled.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Invoice PDF")
+              }
+              if (enr.outstandingNaira > 0 && settings.paymentsEnabled) {
+                Button(
+                  onClick = { onGoToPayment(enr) },
+                  modifier = Modifier.weight(1f).testTag("pay_enrollment_${enr.id}"),
+                ) {
+                  Icon(Icons.Filled.Payments, contentDescription = null, modifier = Modifier.size(16.dp))
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text("Pay Now")
+                }
+              }
+            }
             if (isAdmin && enr.status != "completed") {
               Spacer(modifier = Modifier.height(8.dp))
               Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -508,9 +555,6 @@ fun CourseRegistrationScreen(
                   Text("Mark Graduated")
                 }
               }
-            } else if (!isAdmin && enr.outstandingNaira > 0) {
-              Spacer(modifier = Modifier.height(10.dp))
-              Button(onClick = onGoToPayment) { Text("Pay Outstanding Tuition") }
             }
           }
         }
@@ -557,6 +601,10 @@ fun CourseRegistrationScreen(
           }
         }
       }
+    }
+
+    item {
+      JyBusinessFooter(settings = settings, onNotify = onNotify)
     }
   }
 }

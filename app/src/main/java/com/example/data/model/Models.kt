@@ -10,14 +10,20 @@ data class InstitutionSettings(
   @DocumentId val id: String = "institution",
   val institutionName: String = "JY-COMPUTERS",
   val motto: String = "LEARN • PRACTICE • EXCEL — Empowering People Through Technology",
-  val contactPhone: String = "+234 800 592 6678",
-  val email: String = "admissions@jycomputers.edu.ng",
-  val physicalAddress: String = "Plot 24, Technology Drive, Abuja, Nigeria",
+  val slogan: String = JyCatalogDefaults.OFFICIAL_SLOGAN,
+  val contactPhone: String = JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE,
+  val alternativePhone: String = JyCatalogDefaults.OFFICIAL_ALT_PHONE,
+  val whatsappNumber: String = JyCatalogDefaults.OFFICIAL_PRIMARY_PHONE,
+  val email: String = JyCatalogDefaults.OFFICIAL_EMAIL,
+  val website: String = JyCatalogDefaults.OFFICIAL_WEBSITE,
+  val physicalAddress: String = JyCatalogDefaults.OFFICIAL_ADDRESS,
   val opayBankName: String = JyCatalogDefaults.OFFICIAL_OPAY_BANK,
   val opayAccountName: String = JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NAME,
   val opayAccountNumber: String = JyCatalogDefaults.OFFICIAL_OPAY_ACCOUNT_NUMBER,
   val opayInstructions: String = JyCatalogDefaults.OFFICIAL_OPAY_INSTRUCTIONS,
   val onlinePaymentUrl: String = "",
+  val paymentsEnabled: Boolean = true,
+  val allowPartialPayment: Boolean = true,
   val activeSession: String = "2026/2027 Session",
   val signatoryName: String = "Dr. Joshua Dangana",
   val signatoryTitle: String = "Director of Academic Studies",
@@ -117,22 +123,74 @@ data class Enrollment(
 }
 
 @IgnoreExtraProperties
+data class JyServiceItem(
+  @DocumentId val id: String = "",
+  val title: String = "",
+  val category: String = "Cyber Café & Online Services",
+  val description: String = "",
+  val defaultFeeNaira: Long = 0L,
+  val paymentEnabled: Boolean = true,
+  val allowPartialPayment: Boolean = true,
+  val isTrainingCourse: Boolean = false,
+  val linkedProgrammeId: String = "",
+  val active: Boolean = true,
+  @ServerTimestamp val createdAt: Timestamp? = null,
+  @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
+data class ServiceRequest(
+  @DocumentId val id: String = "",
+  val userId: String = "",
+  val customerName: String = "",
+  val customerPhone: String = "",
+  val customerEmail: String = "",
+  val customerRegNumber: String = "",
+  val requestNumber: String = "",
+  val invoiceNumber: String = "",
+  val serviceId: String = "",
+  val serviceTitle: String = "",
+  val serviceCategory: String = "",
+  val details: String = "",
+  val totalFeeNaira: Long = 0L,
+  val amountPaidNaira: Long = 0L,
+  val paymentStatus: String = "unpaid",
+  val status: String = "pending",
+  val adminNotes: String = "",
+  val invoiceDate: String = "",
+  @ServerTimestamp val createdAt: Timestamp? = null,
+  @ServerTimestamp val updatedAt: Timestamp? = null,
+) {
+  val outstandingNaira: Long
+    get() = (totalFeeNaira - amountPaidNaira).coerceAtLeast(0L)
+}
+
+@IgnoreExtraProperties
 data class Payment(
   @DocumentId val id: String = "",
   val userId: String = "",
   val studentName: String = "",
   val studentIdNumber: String = "",
   val enrollmentId: String = "",
+  val serviceRequestId: String = "",
+  val requestNumber: String = "",
+  val invoiceNumber: String = "",
   val programmeId: String = "",
   val programmeTitle: String = "",
+  val serviceCategory: String = "Training Courses",
   val amountNaira: Long = 0L,
   val method: String = "opay_transfer",
   val reference: String = "",
+  val referenceNormalized: String = "",
   val paymentDate: String = "",
   val senderName: String = "",
+  val senderBank: String = "",
   val evidenceBase64: String = "",
   val status: String = "pending",
   val adminRemarks: String = "",
+  val verifiedByUid: String = "",
+  val verifiedByName: String = "",
+  val verifiedAt: Timestamp? = null,
   @ServerTimestamp val createdAt: Timestamp? = null,
   @ServerTimestamp val updatedAt: Timestamp? = null,
 )
@@ -295,13 +353,205 @@ data class ActivityLog(
 
 object JyCatalogDefaults {
   const val BOOTSTRAP_ADMIN_EMAIL = "joshua.dangana@gmail.com"
-  const val OFFICIAL_OPAY_ACCOUNT_NAME = "JY-COMPUTERS"
+  const val OFFICIAL_PRIMARY_PHONE = "08156879310"
+  const val OFFICIAL_ALT_PHONE = "09167689248"
+  const val OFFICIAL_WHATSAPP_WA_ME = "https://wa.me/2348156879310"
+  const val OFFICIAL_EMAIL = "jycomputers2019@gmail.com"
+  const val OFFICIAL_WEBSITE = "www.jy-computers.com"
+  const val OFFICIAL_ADDRESS =
+    "Shop 4, Maiangwa Street, Dagbana, Jikwoyi Phase 3 Extension, FCT Abuja, Nigeria."
+  const val OFFICIAL_SLOGAN = "Your Trusted Partner for ICT Excellence."
+
+  const val OFFICIAL_OPAY_ACCOUNT_NAME = "Jy-computers"
   const val OFFICIAL_OPAY_ACCOUNT_NUMBER = "6118366524"
   const val OFFICIAL_OPAY_BANK = "OPay"
   const val OFFICIAL_OPAY_INSTRUCTIONS =
-    "Please make your training registration or course payment to the official JY-COMPUTERS account provided above. After making payment, submit your payment evidence or transaction reference for administrative verification."
+    "Transfer the exact payable amount to Bank: OPay | Account Name: Jy-computers | Account Number: 6118366524. After transfer, enter your transaction reference and upload payment evidence for administrator verification."
 
   val TRAINING_LEVELS = listOf("Beginner", "Intermediate", "Advanced")
+
+  val SERVICE_CATEGORIES =
+    listOf(
+      "Training Courses",
+      "Repairs & Maintenance",
+      "Web & IT Solutions",
+      "Cyber Café & Online Services",
+      "Design & Printing",
+    )
+
+  val NIGERIAN_BANKS =
+    listOf(
+      "OPay",
+      "Access Bank",
+      "First Bank of Nigeria",
+      "Guaranty Trust Bank (GTBank)",
+      "United Bank for Africa (UBA)",
+      "Zenith Bank",
+      "Moniepoint MFB",
+      "PalmPay",
+      "Kuda Bank",
+      "Fidelity Bank",
+      "Stanbic IBTC Bank",
+      "Sterling Bank",
+      "Union Bank",
+      "Wema Bank",
+      "FCMB",
+      "Polaris Bank",
+      "Other Nigerian Bank",
+    )
+
+  val DEFAULT_SERVICES =
+    listOf(
+      ServiceSeed(
+        id = "srv_basic_computer_training",
+        title = "Basic Computer Training",
+        category = "Training Courses",
+        description = "Essential digital literacy, Windows, Microsoft Office suite, and internet skills.",
+        defaultFeeNaira = 25_000L,
+        isTrainingCourse = true,
+        linkedProgrammeId = "basic_computer_course",
+      ),
+      ServiceSeed(
+        id = "srv_certificate_course_training",
+        title = "Certificate Course Training",
+        category = "Training Courses",
+        description = "Office automation, spreadsheets, presentation design, and productivity workflows.",
+        defaultFeeNaira = 47_000L,
+        isTrainingCourse = true,
+        linkedProgrammeId = "certificate_course",
+      ),
+      ServiceSeed(
+        id = "srv_diploma_1_training",
+        title = "Diploma 1 Course Training",
+        category = "Training Courses",
+        description = "Intermediate computing covering databases, desktop publishing, and IT operations.",
+        defaultFeeNaira = 50_000L,
+        isTrainingCourse = true,
+        linkedProgrammeId = "diploma_1",
+      ),
+      ServiceSeed(
+        id = "srv_diploma_2_training",
+        title = "Diploma 2 Course Training",
+        category = "Training Courses",
+        description = "Advanced diploma in enterprise software systems, networking, and web design.",
+        defaultFeeNaira = 80_000L,
+        isTrainingCourse = true,
+        linkedProgrammeId = "diploma_2",
+      ),
+      ServiceSeed(
+        id = "srv_computer_repairs_training",
+        title = "Computer Repairs Training",
+        category = "Training Courses",
+        description = "Hands-on laptop and desktop hardware diagnostics, BIOS, and motherboard repairs.",
+        defaultFeeNaira = 200_000L,
+        isTrainingCourse = true,
+        linkedProgrammeId = "computer_repairs",
+      ),
+      ServiceSeed(
+        id = "srv_computer_repairs_maintenance",
+        title = "Computer Repairs and Maintenance",
+        category = "Repairs & Maintenance",
+        description = "Laptop/desktop hardware diagnostics, screen/keyboard replacement, OS reinstall, and servicing.",
+        defaultFeeNaira = 15_000L,
+      ),
+      ServiceSeed(
+        id = "srv_website_development",
+        title = "Website Development",
+        category = "Web & IT Solutions",
+        description = "Custom responsive business, school, e-commerce, and institutional websites.",
+        defaultFeeNaira = 150_000L,
+      ),
+      ServiceSeed(
+        id = "srv_website_management",
+        title = "Website Management",
+        category = "Web & IT Solutions",
+        description = "Ongoing website hosting care, backups, SSL security, content updates, and uptime monitoring.",
+        defaultFeeNaira = 30_000L,
+      ),
+      ServiceSeed(
+        id = "srv_it_support_consultancy",
+        title = "IT Support and Consultancy",
+        category = "Web & IT Solutions",
+        description = "Enterprise ICT advisory, software deployment, office workstation setup, and tech support.",
+        defaultFeeNaira = 25_000L,
+      ),
+      ServiceSeed(
+        id = "srv_computer_networking",
+        title = "Computer Networking",
+        category = "Repairs & Maintenance",
+        description = "LAN/Wi-Fi structured cabling, router/switch setup, CCTV networking, and office intranet.",
+        defaultFeeNaira = 45_000L,
+      ),
+      ServiceSeed(
+        id = "srv_cyber_cafe_services",
+        title = "Cyber Café Services",
+        category = "Cyber Café & Online Services",
+        description = "High-speed browsing, scanning, lamination, passport photography, and email assistance.",
+        defaultFeeNaira = 2_000L,
+        allowPartialPayment = false,
+      ),
+      ServiceSeed(
+        id = "srv_nysc_registration_assistance",
+        title = "NYSC Registration Assistance",
+        category = "Cyber Café & Online Services",
+        description = "Complete NYSC mobilization portal registration, biometric capture, and remita processing.",
+        defaultFeeNaira = 5_000L,
+        allowPartialPayment = false,
+      ),
+      ServiceSeed(
+        id = "srv_green_card_callup_printing",
+        title = "Green Card and Call-up Letter Printing",
+        category = "Cyber Café & Online Services",
+        description = "Official NYSC Green Card and Call-up Letter retrieval, colour printing, and lamination.",
+        defaultFeeNaira = 2_500L,
+        allowPartialPayment = false,
+      ),
+      ServiceSeed(
+        id = "srv_nerd_academic_upload",
+        title = "NERD Academic Document Upload",
+        category = "Cyber Café & Online Services",
+        description = "Accurate scanning, formatting, and verified portal upload for NERD academic documents.",
+        defaultFeeNaira = 4_000L,
+        allowPartialPayment = false,
+      ),
+      ServiceSeed(
+        id = "srv_cac_registration_assistance",
+        title = "CAC Registration Assistance",
+        category = "Cyber Café & Online Services",
+        description = "Business name reservation, CAC pre-incorporation filing, and certificate retrieval support.",
+        defaultFeeNaira = 35_000L,
+      ),
+      ServiceSeed(
+        id = "srv_bulk_printing",
+        title = "Bulk Printing",
+        category = "Design & Printing",
+        description = "High-volume black & white or full-colour printing, binding, and institutional handouts.",
+        defaultFeeNaira = 10_000L,
+      ),
+      ServiceSeed(
+        id = "srv_document_processing",
+        title = "Document Processing",
+        category = "Design & Printing",
+        description = "Professional typesetting, CV/project formatting, PDF editing, and official letters.",
+        defaultFeeNaira = 3_000L,
+        allowPartialPayment = false,
+      ),
+      ServiceSeed(
+        id = "srv_online_registration_services",
+        title = "Online Registration Services",
+        category = "Cyber Café & Online Services",
+        description = "JAMB, WAEC, NECO, NIN, visa forms, scholarship portals, and official online applications.",
+        defaultFeeNaira = 5_000L,
+        allowPartialPayment = false,
+      ),
+      ServiceSeed(
+        id = "srv_graphics_design",
+        title = "Graphics Design",
+        category = "Design & Printing",
+        description = "Logos, flyers, banners, ID cards, business branding, and social media graphics.",
+        defaultFeeNaira = 15_000L,
+      ),
+    )
 
   val DEFAULT_PROGRAMMES =
     listOf(
@@ -415,6 +665,9 @@ object JyCatalogDefaults {
       "Taraba", "Yobe", "Zamfara", "International",
     )
 
+  fun normalizePaymentReferenceKey(reference: String): String =
+    reference.trim().uppercase().replace(Regex("[^A-Z0-9_\\-]"), "_")
+
   fun calculateGrade(totalScore: Long): String =
     when {
       totalScore >= 75 -> "A"
@@ -429,6 +682,18 @@ object JyCatalogDefaults {
     return "₦%,d".format(amount)
   }
 }
+
+data class ServiceSeed(
+  val id: String,
+  val title: String,
+  val category: String,
+  val description: String,
+  val defaultFeeNaira: Long,
+  val paymentEnabled: Boolean = true,
+  val allowPartialPayment: Boolean = true,
+  val isTrainingCourse: Boolean = false,
+  val linkedProgrammeId: String = "",
+)
 
 data class ProgrammeSeed(
   val id: String,
