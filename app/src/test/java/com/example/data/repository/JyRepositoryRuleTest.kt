@@ -1,0 +1,155 @@
+package com.example.data.repository
+
+import com.example.base.FirestoreEmulatorTestBase
+import com.example.data.model.Enrollment
+import com.example.data.model.Programme
+import com.example.data.model.UserProfile
+import com.google.firebase.firestore.FirebaseFirestoreException
+import java.util.UUID
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
+
+  @Test
+  fun registerStudentAndEnrollment_authenticatedOwner_succeedsAndStreams() = runBlocking {
+    val uid = signInTestUser("student_alice_${UUID.randomUUID()}@test.com")
+    val profileRepo = ProfileAndSettingsRepository(firestore)
+    val academicRepo = CourseAndAcademicRepository(firestore)
+
+    val profile =
+      UserProfile(
+        userId = uid,
+        role = "student",
+        studentIdNumber = "JYC-2026-9901",
+        fullName = "Alice Student",
+        gender = "Female",
+        dateOfBirth = "2003-04-12",
+        phoneNumber = "08011223344",
+        email = "alice@test.com",
+        residentialAddress = "10 Tech Road, Abuja",
+        stateOfOrigin = "FCT Abuja",
+        nextOfKin = "Grace Student",
+        nextOfKinPhone = "08099887766",
+        selectedProgrammeId = "coding_programme",
+        selectedProgrammeTitle = "Coding Programme",
+        registrationDate = "2026-11-13",
+        status = "active",
+      )
+
+    val regResult = withTimeout(DEFAULT_TIMEOUT_MS) { profileRepo.registerOrCreateUserProfile(profile) }
+    assertTrue(regResult.isSuccess)
+
+    val loadedProfile = withTimeout(FLOW_TIMEOUT_MS) { profileRepo.observeUserProfile(uid).first { it != null } }
+    assertEquals("Alice Student", loadedProfile?.fullName)
+
+    val programme =
+      Programme(
+        id = "coding_programme",
+        title = "Coding Programme",
+        duration = "6 Months",
+        feeNaira = 450_000L,
+      )
+    val enrollResult =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        academicRepo.registerCourseEnrollment(
+          studentUid = uid,
+          studentName = "Alice Student",
+          studentIdNumber = "JYC-2026-9901",
+          programme = programme,
+          session = "2026/2027 Session",
+        )
+      }
+    assertTrue(enrollResult.isSuccess)
+    val enrollmentId = enrollResult.getOrThrow()
+
+    val financeRepo = FinanceRepository(firestore)
+    val payResult =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        financeRepo.submitPayment(
+          studentUid = uid,
+          studentName = "Alice Student",
+          studentIdNumber = "JYC-2026-9901",
+          enrollment =
+            Enrollment(
+              id = enrollmentId,
+              programmeId = programme.id,
+              programmeTitle = programme.title,
+            ),
+          amountNaira = 200_000L,
+          method = "opay_transfer",
+          reference = "OPAY-${UUID.randomUUID().toString().take(8)}",
+          senderName = "Alice Student",
+          evidenceBase64 = "",
+        )
+      }
+    assertTrue(payResult.isSuccess)
+  }
+
+  @Test
+  fun crossUserProfileAccess_failsWithPermissionDenied() = runBlocking {
+    val aliceUid = signInTestUser("alice_cross_${UUID.randomUUID()}@test.com")
+    val profileRepo = ProfileAndSettingsRepository(firestore)
+    val profile =
+      UserProfile(
+        userId = aliceUid,
+        role = "student",
+        studentIdNumber = "JYC-2026-9902",
+        fullName = "Alice Private",
+        gender = "Female",
+        dateOfBirth = "2003-04-12",
+        phoneNumber = "08011223344",
+        email = "alice@test.com",
+        residentialAddress = "10 Tech Road",
+        stateOfOrigin = "FCT Abuja",
+        nextOfKin = "Grace",
+        nextOfKinPhone = "08099887766",
+        selectedProgrammeId = "diploma_1",
+        selectedProgrammeTitle = "Diploma 1",
+        registrationDate = "2026-11-13",
+        status = "active",
+      )
+    withTimeout(DEFAULT_TIMEOUT_MS) { profileRepo.registerOrCreateUserProfile(profile) }
+
+    signInTestUser("bob_cross_${UUID.randomUUID()}@test.com")
+    var denied = false
+    try {
+      withTimeout(DEFAULT_TIMEOUT_MS) { firestore.collection("users").document(aliceUid).get().await() }
+    } catch (e: FirebaseFirestoreException) {
+      denied = e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
+    }
+    assertTrue("Expected PERMISSION_DENIED when Bob reads Alice PII", denied)
+  }
+
+  @Test
+  fun observeProgrammes_unauthenticatedUser_failsWithPermissionDenied() = runBlocking {
+    auth.signOut()
+    val academicRepo = CourseAndAcademicRepository(firestore)
+    var repoGuarded = false
+    try {
+      withTimeout(FLOW_TIMEOUT_MS) { academicRepo.observeProgrammes().first() }
+    } catch (_: IllegalStateException) {
+      repoGuarded = true
+    }
+    assertTrue("Expected repository auth guard when unauthenticated", repoGuarded)
+
+    var denied = false
+    try {
+      withTimeout(DEFAULT_TIMEOUT_MS) { firestore.collection("programmes").get().await() }
+    } catch (e: Exception) {
+      val firestoreEx = e.unwrapFirestoreException()
+      denied = firestoreEx?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
+    }
+    assertTrue("Expected PERMISSION_DENIED when unauthenticated user reads programmes", denied)
+  }
+
+  private companion object {
+    const val DEFAULT_TIMEOUT_MS = 5000L
+    const val FLOW_TIMEOUT_MS = 4000L
+  }
+}

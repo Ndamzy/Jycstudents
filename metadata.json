@@ -1,0 +1,6 @@
+{
+  "name": "JY-Computers",
+  "description": "JY-Computers Student Management System for managing students, computer training programmes, tuition payments, attendance, academic results, certificates, announcements, and student chat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
