@@ -842,7 +842,7 @@ fun AdminRolesAndLogsScreen(
                 MaterialTheme.colorScheme.onPrimaryContainer,
               )
             }
-            if (user.userId != JyCatalogDefaults.SINGLE_ADMIN_UID) {
+            if (!JyCatalogDefaults.isOwnerAdminIdentity(user.userId, user.email) && user.userId != currentUserId && user.role != "admin") {
               Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                   onClick = { instructorDialogTarget = user },

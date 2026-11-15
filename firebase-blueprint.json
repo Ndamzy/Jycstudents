@@ -422,6 +422,48 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["actorUid", "actorName", "action", "details", "createdAt"]
+    },
+    "AdminAuthAuditLog": {
+      "title": "AdminAuthAuditLog",
+      "description": "Strictly write-only server authentication audit log tracking successful and failed admin login/recovery attempts without storing credentials or raw usernames.",
+      "type": "object",
+      "properties": {
+        "eventType": {
+          "type": "string",
+          "enum": [
+            "ADMIN_LOGIN_SUCCESS",
+            "ADMIN_LOGIN_FAILED",
+            "ADMIN_LOGIN_LOCKED_OUT",
+            "ADMIN_LOGOUT",
+            "ADMIN_PASSWORD_RECOVERED",
+            "ADMIN_RECOVERY_FAILED",
+            "BLOCKED_SECOND_ADMIN_CREATION"
+          ]
+        },
+        "outcome": { "type": "string", "enum": ["success", "failed", "locked_out", "blocked"] },
+        "targetUid": { "type": "string" },
+        "usernameMatched": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "clientIp": { "type": "string" },
+        "deviceInfo": {
+          "type": "object",
+          "properties": {
+            "platform": { "type": "string" },
+            "manufacturer": { "type": "string" },
+            "brand": { "type": "string" },
+            "model": { "type": "string" },
+            "device": { "type": "string" },
+            "osVersion": { "type": "string" },
+            "sdkInt": { "type": "integer" },
+            "appVersion": { "type": "string" },
+            "appPackage": { "type": "string" },
+            "userAgent": { "type": "string" }
+          }
+        },
+        "timestampIso": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["eventType", "outcome", "targetUid", "usernameMatched", "clientIp", "deviceInfo", "timestampIso", "createdAt"]
     }
   },
   "firestore": {
@@ -512,6 +554,10 @@
     "/activity_logs/{logId}": {
       "schema": { "$ref": "#/entities/ActivityLog" },
       "description": "Administrative audit trail."
+    },
+    "/admin_auth_audit/{logId}": {
+      "schema": { "$ref": "#/entities/AdminAuthAuditLog" },
+      "description": "Write-only server security audit log written exclusively by admin-auth-server via Firebase Admin SDK; client reads and writes are completely forbidden."
     }
   }
 }

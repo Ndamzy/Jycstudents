@@ -541,6 +541,200 @@ class SingleAdminSecurityTest : FirestoreEmulatorTestBase() {
     assertTrue("Login with rotated owner password should succeed", rotatedLogin is AdminAuthResult.Success)
   }
 
+  // TEST 11: Admin login sends sanitized device info without credentials and /admin_auth_audit denies client read/write/delete
+  @Test
+  fun test11_adminLoginAuditLog_sendsSafeDeviceInfoAndEnforcesWriteOnlyFirestoreRules() = runBlocking {
+    // 1. Trigger failed login + valid login + logout through AdminAuthClient
+    val failRes =
+      withTimeout(TIMEOUT_MS) {
+        AdminAuthClient.login(
+          username = LocalSingleAdminServer.TEST_USERNAME,
+          password = "WrongAttempt#AuditTest",
+          firebaseAuth = auth,
+        )
+      }
+    assertTrue(failRes is AdminAuthResult.Failed)
+
+    val okRes =
+      withTimeout(TIMEOUT_MS) {
+        AdminAuthClient.login(
+          username = LocalSingleAdminServer.TEST_USERNAME,
+          password = LocalSingleAdminServer.TEST_INITIAL_PASSWORD,
+          firebaseAuth = auth,
+        )
+      }
+    assertTrue(okRes is AdminAuthResult.Success)
+
+    // Verify captured server audit payloads contain device metadata & ZERO sensitive credentials
+    val events = mockServer.recordedAuditEvents.toList()
+    assertTrue("Expected at least 2 audit events", events.size >= 2)
+    val failEvent = events.first { it.optString("eventType") == "ADMIN_LOGIN_FAILED" }
+    val okEvent = events.first { it.optString("eventType") == "ADMIN_LOGIN_SUCCESS" }
+
+    for (ev in listOf(failEvent, okEvent)) {
+      val dev = ev.optJSONObject("deviceInfo")
+      assertTrue("deviceInfo must be sent with every admin login attempt", dev != null)
+      assertEquals("Android", dev!!.optString("platform"))
+      assertTrue("sdkInt must be positive", dev.optInt("sdkInt") > 0)
+      assertTrue("appPackage must not be blank", dev.optString("appPackage").isNotBlank())
+      assertFalse(dev.has("password"))
+      assertFalse(dev.has("username"))
+      assertFalse(dev.has("token"))
+      assertFalse(dev.has("sessionToken"))
+      assertFalse(dev.has("recoveryKey"))
+    }
+
+    val serializedAll = events.joinToString("\n") { it.toString() }
+    assertFalse("Username must never appear in audit events", serializedAll.contains(LocalSingleAdminServer.TEST_USERNAME))
+    assertFalse("Initial password must never appear in audit events", serializedAll.contains(LocalSingleAdminServer.TEST_INITIAL_PASSWORD))
+    assertFalse("Bad attempt password must never appear in audit events", serializedAll.contains("WrongAttempt#AuditTest"))
+
+    // 2. While signed in as SINGLE_ADMIN_UID, verify Firestore client is DENIED all read/write/update/delete on /admin_auth_audit
+    val auditDocRef = firestore.collection("admin_auth_audit").document("client_probe_doc")
+    var adminReadDenied = false
+    var adminWriteDenied = false
+    var adminUpdateDenied = false
+    var adminDeleteDenied = false
+
+    try {
+      withTimeout(TIMEOUT_MS) { firestore.collection("admin_auth_audit").get().await() }
+    } catch (e: Exception) {
+      adminReadDenied = e.unwrapFirestoreException()?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
+    }
+    try {
+      withTimeout(TIMEOUT_MS) {
+        auditDocRef.set(
+          mapOf(
+            "eventType" to "ADMIN_LOGIN_SUCCESS",
+            "outcome" to "success",
+            "createdAt" to FieldValue.serverTimestamp(),
+          )
+        ).await()
+      }
+    } catch (e: Exception) {
+      adminWriteDenied = e.unwrapFirestoreException()?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
+    }
+    try {
+      withTimeout(TIMEOUT_MS) { auditDocRef.update("outcome", "tampered").await() }
+    } catch (e: Exception) {
+      adminUpdateDenied = e.unwrapFirestoreException()?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
+    }
+    try {
+      withTimeout(TIMEOUT_MS) { auditDocRef.delete().await() }
+    } catch (e: Exception) {
+      adminDeleteDenied = e.unwrapFirestoreException()?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
+    }
+
+    assertTrue("Client list on /admin_auth_audit must be denied even for admin", adminReadDenied)
+    assertTrue("Client write on /admin_auth_audit must be denied even for admin", adminWriteDenied)
+    assertTrue("Client update on /admin_auth_audit must be denied even for admin", adminUpdateDenied)
+    assertTrue("Client delete on /admin_auth_audit must be denied even for admin", adminDeleteDenied)
+  }
+
+  // TEST 12: Direct Firebase Auth ('admin' -> 'admin@jy-computers.com') + custom claims + wrong-password + non-admin rejection + session logout
+  @Test
+  fun test12_directFirebaseEmailPasswordAdminLogin_withUsernameMappingAndCustomClaims() = runBlocking {
+    // Switch AdminAuthClient to Direct Firebase Auth mode (no external server override)
+    AdminAuthClient.setEndpointOverrideForTesting("")
+    AdminAuthClient.resetClientLockoutForTesting()
+
+    val syntheticTestPass = "TestEmulatorAdmin#2026!"
+
+    // 1. Provision admin@jy-computers.com WITHOUT custom claims first -> login MUST reject & sign out
+    provisionEmailUserInEmulator(
+      email = JyCatalogDefaults.ADMIN_MAPPED_EMAIL,
+      password = syntheticTestPass,
+      customAttributesJson = "{}",
+    )
+
+    val unclaimedRes =
+      withTimeout(TIMEOUT_MS) {
+        AdminAuthClient.login(
+          username = JyCatalogDefaults.ADMIN_LOGIN_USERNAME,
+          password = syntheticTestPass,
+          firebaseAuth = auth,
+        )
+      }
+    assertTrue("Login without custom claims must fail: $unclaimedRes", unclaimedRes is AdminAuthResult.Failed)
+    assertTrue("Unclaimed user must be immediately signed out", auth.currentUser == null)
+    assertFalse(AdminAuthClient.hasActiveSession())
+
+    // 2. Provision server custom claims { jySingleAdmin: true, role: "admin" } -> login MUST succeed
+    val adminUid =
+      provisionEmailUserInEmulator(
+        email = JyCatalogDefaults.ADMIN_MAPPED_EMAIL,
+        password = syntheticTestPass,
+        customAttributesJson = """{"jySingleAdmin":true,"role":"admin"}""",
+      )
+
+    // 3. Reject student email or wrong username on Admin Login without calling or passing admin gate
+    val studentProbe =
+      withTimeout(TIMEOUT_MS) {
+        AdminAuthClient.login(
+          username = "student@test.com",
+          password = syntheticTestPass,
+          firebaseAuth = auth,
+        )
+      }
+    assertTrue(studentProbe is AdminAuthResult.Failed)
+    assertEquals("Invalid administrator credentials.", (studentProbe as AdminAuthResult.Failed).message)
+
+    // 4. Reject wrong password for 'admin'
+    val wrongPass =
+      withTimeout(TIMEOUT_MS) {
+        AdminAuthClient.login(
+          username = "admin",
+          password = "WrongPassword#999",
+          firebaseAuth = auth,
+        )
+      }
+    assertTrue(wrongPass is AdminAuthResult.Failed)
+    assertEquals("Invalid administrator credentials.", (wrongPass as AdminAuthResult.Failed).message)
+    assertFalse(AdminAuthClient.hasActiveSession())
+
+    // 5. Valid username 'admin' + valid password succeeds via Firebase Auth and passes Firestore admin rules
+    val validRes =
+      withTimeout(TIMEOUT_MS) {
+        AdminAuthClient.login(
+          username = "admin",
+          password = syntheticTestPass,
+          firebaseAuth = auth,
+        )
+      }
+    assertTrue("Expected Success, got $validRes", validRes is AdminAuthResult.Success)
+    assertEquals(adminUid, (validRes as AdminAuthResult.Success).uid)
+    assertTrue(AdminAuthClient.hasActiveSession())
+
+    val profileRepo = ProfileAndSettingsRepository(firestore)
+    assertTrue("isUidAdmin must verify mapped Firebase Auth admin claims", profileRepo.isUidAdmin(adminUid))
+
+    // Remains authenticated when refreshing session between admin routes
+    val refreshed = withTimeout(TIMEOUT_MS) { AdminAuthClient.refreshSession(firebaseAuth = auth) }
+    assertTrue("Admin session must remain valid across navigation", refreshed)
+
+    // Perform authorized admin write in Firestore
+    val academicRepo = CourseAndAcademicRepository(firestore)
+    val saveRes =
+      withTimeout(TIMEOUT_MS) {
+        academicRepo.saveProgramme(
+          Programme(
+            id = "direct_fb_admin_prog_${UUID.randomUUID().toString().take(6)}",
+            title = "Firebase Admin Verified Course",
+            duration = "2 Months",
+            feeNaira = 45_000L,
+            active = true,
+          )
+        )
+      }
+    assertTrue("Verified Firebase Auth admin must write programmes cleanly", saveRes.isSuccess)
+
+    // 6. Logout properly destroys both client session and FirebaseAuth user
+    withTimeout(TIMEOUT_MS) { AdminAuthClient.logout(firebaseAuth = auth) }
+    assertFalse(AdminAuthClient.hasActiveSession())
+    assertTrue(auth.currentUser == null)
+    AdminAuthClient.resetClientLockoutForTesting()
+  }
+
   private companion object {
     const val TIMEOUT_MS = 8000L
   }
@@ -564,6 +758,7 @@ internal class LocalSingleAdminServer(
   @Volatile
   private var lockedUntilMs = 0L
   private val activeSessions = ConcurrentHashMap<String, String>() // token -> csrf
+  val recordedAuditEvents: MutableList<JSONObject> = java.util.Collections.synchronizedList(mutableListOf())
 
   val baseUrl: String
     get() = "http://127.0.0.1:${server.address.port}"
@@ -587,6 +782,20 @@ internal class LocalSingleAdminServer(
     )
   }
 
+  private fun sanitizeDevice(raw: JSONObject?): JSONObject {
+    val safe = JSONObject()
+    val allowed = listOf("platform", "manufacturer", "brand", "model", "device", "osVersion", "appVersion", "appPackage")
+    if (raw != null) {
+      for (k in allowed) {
+        val v = raw.optString(k, "").trim()
+        if (v.isNotEmpty()) safe.put(k, v)
+      }
+      if (raw.has("sdkInt")) safe.put("sdkInt", raw.optInt("sdkInt", 0))
+    }
+    if (!safe.has("platform")) safe.put("platform", "unknown")
+    return safe
+  }
+
   private fun handle(ex: HttpExchange) {
     val path = ex.requestURI.path.orEmpty()
     val method = ex.requestMethod.orEmpty()
@@ -596,7 +805,15 @@ internal class LocalSingleAdminServer(
     when {
       method == "POST" && path == "/admin/login" -> {
         val now = System.currentTimeMillis()
+        val device = sanitizeDevice(json.optJSONObject("deviceInfo"))
         if (lockedUntilMs > now) {
+          recordedAuditEvents.add(
+            JSONObject()
+              .put("eventType", "ADMIN_LOGIN_LOCKED_OUT")
+              .put("outcome", "locked_out")
+              .put("usernameMatched", false)
+              .put("deviceInfo", device)
+          )
           respondJson(
             ex,
             429,
@@ -611,6 +828,13 @@ internal class LocalSingleAdminServer(
         if (!uOk || !pOk) {
           if (failedAttempts.incrementAndGet() >= 5) {
             lockedUntilMs = now + 15 * 60 * 1000L
+            recordedAuditEvents.add(
+              JSONObject()
+                .put("eventType", "ADMIN_LOGIN_LOCKED_OUT")
+                .put("outcome", "locked_out")
+                .put("usernameMatched", uOk)
+                .put("deviceInfo", device)
+            )
             respondJson(
               ex,
               429,
@@ -619,6 +843,13 @@ internal class LocalSingleAdminServer(
                 .put("retryAfterSeconds", 900),
             )
           } else {
+            recordedAuditEvents.add(
+              JSONObject()
+                .put("eventType", "ADMIN_LOGIN_FAILED")
+                .put("outcome", "failed")
+                .put("usernameMatched", uOk)
+                .put("deviceInfo", device)
+            )
             respondJson(ex, 401, JSONObject().put("error", "Invalid administrator credentials."))
           }
           return
@@ -626,6 +857,13 @@ internal class LocalSingleAdminServer(
 
         failedAttempts.set(0)
         lockedUntilMs = 0L
+        recordedAuditEvents.add(
+          JSONObject()
+            .put("eventType", "ADMIN_LOGIN_SUCCESS")
+            .put("outcome", "success")
+            .put("usernameMatched", true)
+            .put("deviceInfo", device)
+        )
         val sessionToken = "sess_${UUID.randomUUID()}"
         val csrfToken = "csrf_${UUID.randomUUID()}"
         activeSessions[sessionToken] = csrfToken

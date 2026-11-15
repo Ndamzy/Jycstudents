@@ -1,9 +1,11 @@
 package com.example.data.remote
 
+import android.os.Build
 import com.example.BuildConfig
 import com.example.data.model.JyCatalogDefaults
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.auth.auth
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -58,13 +60,24 @@ object AdminAuthClient {
   @Volatile
   private var testEndpointOverride: String? = null
 
+  private val clientLock = Any()
+  private var clientFailedAttempts = 0
+  private var clientLockedUntilMs = 0L
+
   fun setEndpointOverrideForTesting(url: String?) {
     testEndpointOverride = url?.trim()?.trimEnd('/')
   }
 
+  internal fun resetClientLockoutForTesting() {
+    synchronized(clientLock) {
+      clientFailedAttempts = 0
+      clientLockedUntilMs = 0L
+    }
+  }
+
   private fun resolveBaseUrl(): String {
     val override = testEndpointOverride
-    if (!override.isNullOrBlank()) return override
+    if (override != null) return override
     return BuildConfig.ADMIN_AUTH_ENDPOINT_URL.trim().trimEnd('/')
   }
 
@@ -108,18 +121,17 @@ object AdminAuthClient {
       if (cleanUser.isBlank() || password.isBlank()) {
         return@withContext AdminAuthResult.Failed("Enter your administrator username and password.")
       }
+      val baseUrl = resolveBaseUrl()
       if (!isBackendConfigured()) {
-        return@withContext AdminAuthResult.Failed(
-          "Administrator authentication server is not configured. Deploy admin-auth-server and set ADMIN_AUTH_ENDPOINT_URL in AI Studio Secrets."
-        )
+        return@withContext loginViaFirebaseAuth(cleanUser, password, firebaseAuth)
       }
 
-      val baseUrl = resolveBaseUrl()
       try {
         val payload =
           JSONObject().apply {
             put("username", cleanUser)
             put("password", password)
+            put("deviceInfo", collectSafeDeviceInfo())
           }
         val req =
           Request.Builder()
@@ -163,7 +175,7 @@ object AdminAuthClient {
           val authInstance = firebaseAuth ?: Firebase.auth
           val authResult = authInstance.signInWithCustomToken(customToken).await()
           val signedInUser = authResult.user
-          if (signedInUser == null || signedInUser.uid != JyCatalogDefaults.SINGLE_ADMIN_UID) {
+          if (signedInUser == null || !JyCatalogDefaults.isOwnerAdminIdentity(signedInUser.uid, signedInUser.email)) {
             authInstance.signOut()
             return@withContext AdminAuthResult.Failed("Administrator identity verification failed.")
           }
@@ -195,6 +207,139 @@ object AdminAuthClient {
         )
       }
     }
+
+  private suspend fun loginViaFirebaseAuth(
+    cleanUser: String,
+    password: String,
+    firebaseAuth: FirebaseAuth?,
+  ): AdminAuthResult {
+    val now = System.currentTimeMillis()
+    val remainingLockSeconds =
+      synchronized(clientLock) {
+        if (clientLockedUntilMs > now) ((clientLockedUntilMs - now + 999L) / 1000L) else 0L
+      }
+    if (remainingLockSeconds > 0L) {
+      val mins = ((remainingLockSeconds + 59L) / 60L).coerceAtLeast(1L)
+      return AdminAuthResult.LockedOut(
+        message = "Too many failed administrator login attempts. Try again in $mins minute(s).",
+        retryAfterSeconds = remainingLockSeconds,
+      )
+    }
+
+    val mappedEmail = JyCatalogDefaults.resolveAdminAuthEmail(cleanUser)
+    if (mappedEmail == null) {
+      val lockedNow = recordClientFailure(now)
+      return if (lockedNow) {
+        AdminAuthResult.LockedOut(
+          message = "Too many failed login attempts. Administrator login is temporarily locked.",
+          retryAfterSeconds = CLIENT_LOCKOUT_MS / 1000L,
+        )
+      } else {
+        AdminAuthResult.Failed("Invalid administrator credentials.")
+      }
+    }
+
+    val authInstance = firebaseAuth ?: Firebase.auth
+    return try {
+      val authResult = authInstance.signInWithEmailAndPassword(mappedEmail, password).await()
+      val signedInUser = authResult.user
+      if (signedInUser == null || !JyCatalogDefaults.isOwnerAdminIdentity(signedInUser.uid, signedInUser.email)) {
+        authInstance.signOut()
+        return AdminAuthResult.Failed("Administrator identity verification failed.")
+      }
+
+      val tokenResult = signedInUser.getIdToken(true).await()
+      val hasAdminClaim = tokenResult.claims["jySingleAdmin"] == true
+      val roleClaim = tokenResult.claims["role"] as? String
+      if (!hasAdminClaim || roleClaim != "admin" || tokenResult.signInProvider == "google.com") {
+        authInstance.signOut()
+        return AdminAuthResult.Failed(
+          "Administrator role claims are not provisioned for this account. Assign custom claims (role='admin', jySingleAdmin=true) in Firebase."
+        )
+      }
+
+      synchronized(clientLock) {
+        clientFailedAttempts = 0
+        clientLockedUntilMs = 0L
+      }
+
+      val expiresAtMs = now + DIRECT_SESSION_TTL_MS
+      _sessionState.value =
+        AdminSessionState(
+          sessionToken = "firebase_auth:${signedInUser.uid}",
+          csrfToken = "",
+          expiresAtMs = expiresAtMs,
+          inactivityTimeoutMs = AdminSessionState.DEFAULT_INACTIVITY_TIMEOUT_MS,
+          lastActivityAtMs = now,
+          sessionVersion = 1,
+          authenticated = true,
+        )
+      AdminAuthResult.Success(uid = signedInUser.uid, expiresAtMs = expiresAtMs)
+    } catch (e: FirebaseAuthException) {
+      when (e.errorCode) {
+        "ERROR_TOO_MANY_REQUESTS", "TOO_MANY_ATTEMPTS_TRY_LATER" ->
+          AdminAuthResult.LockedOut(
+            message = "Too many failed login attempts. Administrator login is temporarily locked by Firebase Authentication.",
+            retryAfterSeconds = CLIENT_LOCKOUT_MS / 1000L,
+          )
+        "ERROR_USER_DISABLED" ->
+          AdminAuthResult.Failed("This administrator account is disabled in Firebase Authentication.")
+        "ERROR_INVALID_CREDENTIAL", "ERROR_WRONG_PASSWORD", "ERROR_USER_NOT_FOUND", "ERROR_INVALID_EMAIL" -> {
+          val lockedNow = recordClientFailure(now)
+          if (lockedNow) {
+            AdminAuthResult.LockedOut(
+              message = "Too many failed login attempts. Administrator login is temporarily locked.",
+              retryAfterSeconds = CLIENT_LOCKOUT_MS / 1000L,
+            )
+          } else {
+            AdminAuthResult.Failed("Invalid administrator credentials.")
+          }
+        }
+        else ->
+          AdminAuthResult.Failed(e.localizedMessage ?: "Administrator authentication failed.")
+      }
+    } catch (e: Exception) {
+      val msg = e.localizedMessage.orEmpty()
+      if (msg.contains("TOO_MANY_ATTEMPTS", ignoreCase = true)) {
+        AdminAuthResult.LockedOut(
+          message = "Too many failed login attempts. Administrator login is temporarily locked.",
+          retryAfterSeconds = CLIENT_LOCKOUT_MS / 1000L,
+        )
+      } else if (
+        msg.contains("INVALID_LOGIN_CREDENTIALS", ignoreCase = true) ||
+          msg.contains("INVALID_PASSWORD", ignoreCase = true) ||
+          msg.contains("EMAIL_NOT_FOUND", ignoreCase = true) ||
+          msg.contains("INVALID_CREDENTIAL", ignoreCase = true)
+      ) {
+        val lockedNow = recordClientFailure(now)
+        if (lockedNow) {
+          AdminAuthResult.LockedOut(
+            message = "Too many failed login attempts. Administrator login is temporarily locked.",
+            retryAfterSeconds = CLIENT_LOCKOUT_MS / 1000L,
+          )
+        } else {
+          AdminAuthResult.Failed("Invalid administrator credentials.")
+        }
+      } else {
+        AdminAuthResult.Failed(msg.ifBlank { "Unable to authenticate administrator." })
+      }
+    }
+  }
+
+  private fun recordClientFailure(nowMs: Long): Boolean =
+    synchronized(clientLock) {
+      clientFailedAttempts += 1
+      if (clientFailedAttempts >= MAX_CLIENT_FAILED_ATTEMPTS) {
+        clientLockedUntilMs = nowMs + CLIENT_LOCKOUT_MS
+        true
+      } else {
+        false
+      }
+    }
+
+  private const val MAX_CLIENT_FAILED_ATTEMPTS = 5
+  private const val CLIENT_LOCKOUT_MS = 15 * 60 * 1000L
+  private const val DIRECT_SESSION_TTL_MS = 8 * 60 * 60 * 1000L
 
   suspend fun verifyServerSession(
     tokenOverride: String? = null,
@@ -236,12 +381,32 @@ object AdminAuthClient {
   ): Boolean =
     withContext(Dispatchers.IO) {
       val current = _sessionState.value
-      if (!current.authenticated || current.sessionToken.isBlank() || !isBackendConfigured()) {
+      if (!current.authenticated || current.sessionToken.isBlank()) {
         return@withContext false
       }
       if (isSessionExpiredDueToInactivity() || System.currentTimeMillis() >= current.expiresAtMs) {
         _sessionState.value = AdminSessionState()
         return@withContext false
+      }
+      if (!isBackendConfigured()) {
+        return@withContext try {
+          val authInstance = firebaseAuth ?: Firebase.auth
+          val signedInUser = authInstance.currentUser ?: return@withContext false
+          val tokenResult = signedInUser.getIdToken(false).await()
+          val valid =
+            JyCatalogDefaults.isOwnerAdminIdentity(signedInUser.uid, signedInUser.email) &&
+              tokenResult.claims["jySingleAdmin"] == true &&
+              tokenResult.claims["role"] == "admin" &&
+              tokenResult.signInProvider != "google.com"
+          if (!valid) {
+            _sessionState.value = AdminSessionState()
+          } else {
+            _sessionState.value = current.copy(lastActivityAtMs = System.currentTimeMillis())
+          }
+          valid
+        } catch (_: Exception) {
+          false
+        }
       }
       val baseUrl = resolveBaseUrl()
       try {
@@ -282,12 +447,13 @@ object AdminAuthClient {
       val baseUrl = resolveBaseUrl()
       try {
         if (current.sessionToken.isNotBlank() && isBackendConfigured()) {
+          val logoutBody = JSONObject().put("deviceInfo", collectSafeDeviceInfo()).toString()
           val req =
             Request.Builder()
               .url("$baseUrl/admin/logout")
               .header("Authorization", "Bearer ${current.sessionToken}")
               .header("X-CSRF-Token", current.csrfToken)
-              .post("{}".toRequestBody("application/json".toMediaType()))
+              .post(logoutBody.toRequestBody("application/json; charset=utf-8".toMediaType()))
               .build()
           httpClient.newCall(req).execute().close()
         }
@@ -314,7 +480,7 @@ object AdminAuthClient {
       }
       if (!isBackendConfigured()) {
         return@withContext AdminRecoveryResult.Failed(
-          "Administrator recovery server is not configured. Configure ADMIN_AUTH_ENDPOINT_URL first."
+          "Owner password reset must be performed via Firebase Console (Authentication -> Users) or the offline provisioning script when admin-auth-server is not deployed."
         )
       }
       val baseUrl = resolveBaseUrl()
@@ -324,6 +490,7 @@ object AdminAuthClient {
             put("username", username.trim())
             put("recoveryKey", recoveryKey.trim())
             put("newPassword", newPassword)
+            put("deviceInfo", collectSafeDeviceInfo())
           }
         val req =
           Request.Builder()
@@ -354,4 +521,26 @@ object AdminAuthClient {
         )
       }
     }
+
+  /**
+   * Collects strictly non-sensitive hardware/OS/app telemetry for security audit logging.
+   * Never includes usernames, passwords, tokens, recovery keys, device serials, or user PII.
+   */
+  fun collectSafeDeviceInfo(): JSONObject {
+    fun safeField(raw: String?, fallback: String = "unknown", maxLen: Int = 80): String =
+      raw?.replace(Regex("[\\r\\n\\t\\u0000-\\u001f]+"), " ")?.trim()?.take(maxLen)
+        ?.ifBlank { fallback } ?: fallback
+
+    return JSONObject().apply {
+      put("platform", "Android")
+      put("manufacturer", safeField(Build.MANUFACTURER))
+      put("brand", safeField(Build.BRAND))
+      put("model", safeField(Build.MODEL))
+      put("device", safeField(Build.DEVICE))
+      put("osVersion", safeField(Build.VERSION.RELEASE, fallback = "Android"))
+      put("sdkInt", Build.VERSION.SDK_INT.coerceAtLeast(1))
+      put("appVersion", safeField(BuildConfig.VERSION_NAME, fallback = "1.0"))
+      put("appPackage", safeField(BuildConfig.APPLICATION_ID, maxLen = 120))
+    }
+  }
 }

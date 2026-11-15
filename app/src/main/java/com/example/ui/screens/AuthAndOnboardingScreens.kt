@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -92,6 +94,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -514,6 +519,33 @@ fun LoginScreen(
               )
               Spacer(modifier = Modifier.height(16.dp))
 
+              val submitAdminLogin: () -> Unit = {
+                errorMsg = null
+                recoveryMessage = null
+                if (adminUsername.isBlank() || adminPassword.isBlank()) {
+                  errorMsg = "Enter both administrator username and password."
+                } else {
+                  isLoading = true
+                  scope.launch {
+                    when (val result = AdminAuthClient.login(adminUsername, adminPassword)) {
+                      is AdminAuthResult.Success -> {
+                        adminPassword = ""
+                        isLoading = false
+                        onAuthSuccess()
+                      }
+                      is AdminAuthResult.LockedOut -> {
+                        isLoading = false
+                        errorMsg = result.message
+                      }
+                      is AdminAuthResult.Failed -> {
+                        isLoading = false
+                        errorMsg = result.message
+                      }
+                    }
+                  }
+                }
+              }
+
               OutlinedTextField(
                 value = adminUsername,
                 onValueChange = {
@@ -523,6 +555,13 @@ fun LoginScreen(
                 label = { Text("Username") },
                 singleLine = true,
                 enabled = !isLoading,
+                keyboardOptions =
+                  KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Next,
+                  ),
                 modifier = Modifier.fillMaxWidth().testTag("admin_username_input"),
               )
 
@@ -537,6 +576,14 @@ fun LoginScreen(
                 label = { Text("Password") },
                 singleLine = true,
                 enabled = !isLoading,
+                keyboardOptions =
+                  KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Password,
+                    imeAction = ImeAction.Done,
+                  ),
+                keyboardActions = KeyboardActions(onDone = { if (!isLoading) submitAdminLogin() }),
                 visualTransformation =
                   if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
@@ -557,32 +604,7 @@ fun LoginScreen(
               Spacer(modifier = Modifier.height(18.dp))
 
               Button(
-                onClick = {
-                  errorMsg = null
-                  recoveryMessage = null
-                  if (adminUsername.isBlank() || adminPassword.isBlank()) {
-                    errorMsg = "Enter both administrator username and password."
-                    return@Button
-                  }
-                  isLoading = true
-                  scope.launch {
-                    when (val result = AdminAuthClient.login(adminUsername, adminPassword)) {
-                      is AdminAuthResult.Success -> {
-                        adminPassword = ""
-                        isLoading = false
-                        onAuthSuccess()
-                      }
-                      is AdminAuthResult.LockedOut -> {
-                        isLoading = false
-                        errorMsg = result.message
-                      }
-                      is AdminAuthResult.Failed -> {
-                        isLoading = false
-                        errorMsg = result.message
-                      }
-                    }
-                  }
-                },
+                onClick = submitAdminLogin,
                 enabled = !isLoading,
                 modifier =
                   Modifier.fillMaxWidth().height(54.dp).testTag("admin_login_submit_button"),

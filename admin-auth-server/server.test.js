@@ -14,9 +14,11 @@ let currentNow = 1_700_000_000_000;
 let server;
 let baseUrl;
 let service;
+let persistedAuditDocs = [];
 
 beforeEach(async () => {
   currentNow = 1_700_000_000_000;
+  persistedAuditDocs = [];
   service = createAdminAuthService({
     adminUsername: TEST_ADMIN_USER,
     adminPasswordHash: hashSecret(TEST_ADMIN_PASS),
@@ -33,6 +35,9 @@ beforeEach(async () => {
         return createEmulatorCustomToken(uid, claims);
       },
       async revokeRefreshTokens() {},
+      async writeAuditLog(entry) {
+        persistedAuditDocs.push(entry);
+      },
     },
   });
   server = service.createHttpServer();
@@ -267,4 +272,176 @@ test("Owner-only password recovery updates hash and invalidates all active sessi
     body: JSON.stringify({ username: TEST_ADMIN_USER, password: "RotatedStrong#2027!" }),
   });
   assert.equal(newPassLogin.status, 200);
+});
+
+test("TEST 11: Write-only audit logger captures success/failure/deviceInfo/timestamp and strips all sensitive credentials", async () => {
+  const { stripSensitiveFieldsDeep } = require("./audit-logger");
+
+  const injectedDevice = {
+    platform: "Android",
+    manufacturer: "Samsung",
+    brand: "samsung",
+    model: "SM-A546B",
+    device: "a54x",
+    osVersion: "14",
+    sdkInt: 34,
+    appVersion: "1.0",
+    appPackage: "com.aistudio.jycomputers.mrxqkp",
+    // Attempted credential pollution inside deviceInfo:
+    password: "leaked_password_attempt",
+    username: TEST_ADMIN_USER,
+    token: "leaked_token_attempt",
+    secret: "leaked_secret",
+    recoveryKey: TEST_RECOVERY_KEY,
+    userAgent: "Bearer supersecrettoken123",
+  };
+
+  // 1. Failed attempt
+  const failRes = await fetch(`${baseUrl}/admin/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "User-Agent": "scrypt$16384$fakehash" },
+    body: JSON.stringify({
+      username: TEST_ADMIN_USER,
+      password: "WrongAttempt#Password1",
+      deviceInfo: injectedDevice,
+    }),
+  });
+  assert.equal(failRes.status, 401);
+
+  // 2. Successful login attempt
+  const okRes = await fetch(`${baseUrl}/admin/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "User-Agent": "okhttp/4.12.0 JYComputers/1.0" },
+    body: JSON.stringify({
+      username: TEST_ADMIN_USER,
+      password: TEST_ADMIN_PASS,
+      deviceInfo: injectedDevice,
+    }),
+  });
+  assert.equal(okRes.status, 200);
+  const okJson = await okRes.json();
+
+  assert.equal(persistedAuditDocs.length, 2);
+  const [failDoc, okDoc] = persistedAuditDocs;
+
+  assert.equal(failDoc.eventType, "ADMIN_LOGIN_FAILED");
+  assert.equal(failDoc.outcome, "failed");
+  assert.equal(failDoc.usernameMatched, true);
+  assert.equal(failDoc.deviceInfo.manufacturer, "Samsung");
+  assert.equal(failDoc.deviceInfo.model, "SM-A546B");
+  assert.equal(failDoc.deviceInfo.sdkInt, 34);
+  assert.equal(failDoc.deviceInfo.userAgent, "[REDACTED]");
+  assert.ok(failDoc.timestampIso);
+
+  assert.equal(okDoc.eventType, "ADMIN_LOGIN_SUCCESS");
+  assert.equal(okDoc.outcome, "success");
+  assert.equal(okDoc.usernameMatched, true);
+  assert.equal(okDoc.deviceInfo.platform, "Android");
+  assert.equal(okDoc.deviceInfo.appPackage, "com.aistudio.jycomputers.mrxqkp");
+  assert.equal(okDoc.deviceInfo.userAgent, "okhttp/4.12.0 JYComputers/1.0");
+
+  // Confirm ZERO credential strings or tokens appear anywhere in persisted audit docs
+  const serialized = JSON.stringify(persistedAuditDocs);
+  for (const sensitive of [
+    TEST_ADMIN_USER,
+    TEST_ADMIN_PASS,
+    "WrongAttempt#Password1",
+    TEST_RECOVERY_KEY,
+    TEST_SECRET,
+    okJson.sessionToken,
+    okJson.csrfToken,
+    okJson.customToken,
+    "leaked_password_attempt",
+    "leaked_token_attempt",
+    "leaked_secret",
+    "scrypt$16384$fakehash",
+  ]) {
+    assert.ok(!serialized.includes(sensitive), `Sensitive string leaked into audit log: ${sensitive}`);
+  }
+
+  // Direct unit check on deep key stripper
+  const scrubbed = stripSensitiveFieldsDeep({
+    safe: "ok",
+    nested: { password: "p", secret: "s", sessionToken: "t", keepMe: 42 },
+  });
+  assert.deepEqual(scrubbed, { safe: "ok", nested: { keepMe: 42 } });
+});
+
+test("TEST 12: Integration — admin-auth-server writes sanitized login audit entries directly to Firestore Emulator", async (t) => {
+  const firestoreHost = process.env.FIRESTORE_EMULATOR_HOST;
+  const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
+  if (!firestoreHost || !authHost) {
+    t.skip("FIRESTORE_EMULATOR_HOST / FIREBASE_AUTH_EMULATOR_HOST not set");
+    return;
+  }
+
+  const projectId = process.env.GCP_PROJECT || "demo-no-project";
+  const databaseId = "ai-studio-android-jycomput-682cf32f-41f3-47bf-a6b2-6ad57154d3a5";
+
+  // Clear emulator database before test
+  await fetch(
+    `http://${firestoreHost}/emulator/v1/projects/${projectId}/databases/${databaseId}/documents`,
+    { method: "DELETE" }
+  );
+
+  const emuService = createAdminAuthService({
+    adminUsername: TEST_ADMIN_USER,
+    adminPasswordHash: hashSecret(TEST_ADMIN_PASS),
+    adminRecoveryKeyHash: hashSecret(TEST_RECOVERY_KEY),
+    sessionSecret: TEST_SECRET,
+    firebaseProjectId: projectId,
+    firestoreDatabaseId: databaseId,
+  });
+  const emuServer = emuService.createHttpServer();
+  await new Promise((resolve) => emuServer.listen(0, "127.0.0.1", resolve));
+  const emuBaseUrl = `http://127.0.0.1:${emuServer.address().port}`;
+
+  try {
+    const failed = await fetch(`${emuBaseUrl}/admin/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: "wrong_admin_probe",
+        password: "WrongPassword#999",
+        deviceInfo: { platform: "Android", model: "Pixel 8 Pro", sdkInt: 34 },
+      }),
+    });
+    assert.equal(failed.status, 401);
+
+    const succeeded = await fetch(`${emuBaseUrl}/admin/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: TEST_ADMIN_USER,
+        password: TEST_ADMIN_PASS,
+        deviceInfo: { platform: "Android", model: "Pixel 8 Pro", sdkInt: 34 },
+      }),
+    });
+    assert.equal(succeeded.status, 200);
+    const loginJson = await succeeded.json();
+
+    // Verify persisted Firestore documents using owner privileges
+    const listResp = await fetch(
+      `http://${firestoreHost}/v1/projects/${projectId}/databases/${databaseId}/documents/admin_auth_audit`,
+      { headers: { Authorization: "Bearer owner" } }
+    );
+    assert.equal(listResp.status, 200);
+    const listData = await listResp.json();
+    const docs = listData.documents || [];
+    assert.equal(docs.length, 2);
+
+    const eventTypes = docs.map((d) => d.fields.eventType.stringValue).sort();
+    assert.deepEqual(eventTypes, ["ADMIN_LOGIN_FAILED", "ADMIN_LOGIN_SUCCESS"]);
+
+    const serialized = JSON.stringify(docs);
+    assert.ok(serialized.includes("Pixel 8 Pro"));
+    assert.ok(!serialized.includes(TEST_ADMIN_USER));
+    assert.ok(!serialized.includes(TEST_ADMIN_PASS));
+    assert.ok(!serialized.includes("wrong_admin_probe"));
+    assert.ok(!serialized.includes("WrongPassword#999"));
+    assert.ok(!serialized.includes(loginJson.sessionToken));
+    assert.ok(!serialized.includes(loginJson.customToken));
+  } finally {
+    await new Promise((resolve) => emuServer.close(resolve));
+  }
 });

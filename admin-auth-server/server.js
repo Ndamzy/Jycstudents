@@ -13,6 +13,12 @@ const {
   parseCookies,
   createEmulatorCustomToken,
 } = require("./crypto-utils");
+const {
+  DEFAULT_FIRESTORE_DATABASE_ID,
+  sanitizeDeviceInfo,
+  buildAuditDocument,
+  writeAuditToFirestoreEmulator,
+} = require("./audit-logger");
 
 const DEFAULT_MAX_FAILED_ATTEMPTS = 5;
 const DEFAULT_ATTEMPT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
@@ -85,7 +91,18 @@ function buildClearCookieHeader(name, { httpOnly = true, secure = true } = {}) {
   return parts.join("; ");
 }
 
-function resolveDefaultFirebaseBridge(logger) {
+function resolveDefaultFirebaseBridge(logger, options = {}) {
+  const databaseId =
+    options.firestoreDatabaseId ||
+    process.env.FIRESTORE_DATABASE_ID ||
+    DEFAULT_FIRESTORE_DATABASE_ID;
+  const projectId =
+    options.firebaseProjectId ||
+    process.env.GOOGLE_CLOUD_PROJECT ||
+    process.env.GCLOUD_PROJECT ||
+    process.env.GCP_PROJECT ||
+    "demo-no-project";
+
   if (process.env.FIREBASE_AUTH_EMULATOR_HOST) {
     return {
       mode: "emulator",
@@ -94,6 +111,15 @@ function resolveDefaultFirebaseBridge(logger) {
       },
       async revokeRefreshTokens(_uid) {
         // Emulator revoke is enforced via server session store + sessionVersion claims.
+      },
+      async writeAuditLog(entry) {
+        if (process.env.FIRESTORE_EMULATOR_HOST) {
+          await writeAuditToFirestoreEmulator(entry, {
+            emulatorHost: process.env.FIRESTORE_EMULATOR_HOST,
+            projectId,
+            databaseId,
+          });
+        }
       },
     };
   }
@@ -110,6 +136,9 @@ function resolveDefaultFirebaseBridge(logger) {
     adminSdk.initializeApp();
   }
 
+  const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+  const firestoreDb = getFirestore(adminSdk.app(), databaseId);
+
   return {
     mode: "firebase-admin",
     async createCustomToken(uid, claims) {
@@ -117,6 +146,20 @@ function resolveDefaultFirebaseBridge(logger) {
     },
     async revokeRefreshTokens(uid) {
       await adminSdk.auth().revokeRefreshTokens(uid);
+    },
+    async writeAuditLog(entry) {
+      if (process.env.FIRESTORE_EMULATOR_HOST) {
+        await writeAuditToFirestoreEmulator(entry, {
+          emulatorHost: process.env.FIRESTORE_EMULATOR_HOST,
+          projectId,
+          databaseId,
+        });
+        return;
+      }
+      await firestoreDb.collection("admin_auth_audit").add({
+        ...entry,
+        createdAt: FieldValue.serverTimestamp(),
+      });
     },
   };
 }
@@ -142,13 +185,16 @@ function createAdminAuthService(options = {}) {
     secureCookies: options.secureCookies ?? process.env.ADMIN_SECURE_COOKIES !== "false",
   };
 
-  const firebaseBridge = options.firebaseBridge !== undefined ? options.firebaseBridge : resolveDefaultFirebaseBridge(logger);
+  const firebaseBridge =
+    options.firebaseBridge !== undefined
+      ? options.firebaseBridge
+      : resolveDefaultFirebaseBridge(logger, options);
 
   let currentPasswordHash = config.passwordHash;
   let sessionVersion = Number(options.initialSessionVersion || 1);
   const activeSessions = new Map(); // sessionId -> { sessionId, csrfToken, sessionVersion, issuedAtMs, expiresAtMs, lastActivityAtMs, ip }
   const throttleMap = new Map(); // key -> { failures: number[], lockedUntilMs: number }
-  const auditLogs = []; // server-side protected audit trail
+  const auditLogs = []; // server-side sanitized audit trail mirror
 
   function isServerConfigured() {
     return (
@@ -162,16 +208,36 @@ function createAdminAuthService(options = {}) {
     );
   }
 
-  function recordAudit(eventType, details, ip) {
+  async function recordAudit({ eventType, outcome, usernameMatched = false, details, ip, deviceInfo }) {
+    const doc = buildAuditDocument({
+      eventType,
+      outcome,
+      usernameMatched,
+      reason: details,
+      clientIp: ip,
+      deviceInfo,
+      nowMs: nowFn(),
+    });
     const entry = {
       id: crypto.randomUUID(),
-      timestamp: new Date(nowFn()).toISOString(),
-      eventType,
-      details,
-      ip,
+      timestamp: doc.timestampIso,
+      details: doc.reason,
+      ip: doc.clientIp,
+      ...doc,
     };
     auditLogs.unshift(entry);
     if (auditLogs.length > 500) auditLogs.length = 500;
+
+    if (typeof firebaseBridge?.writeAuditLog === "function") {
+      try {
+        await Promise.race([
+          firebaseBridge.writeAuditLog(doc),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Audit write timeout")), 2500)),
+        ]);
+      } catch (err) {
+        logger.warn?.(`Failed to persist audit entry (${doc.eventType}): ${err?.message || "unknown error"}`);
+      }
+    }
   }
 
   function getThrottleKeys(ip) {
@@ -281,7 +347,13 @@ function createAdminAuthService(options = {}) {
 
       // Explicitly block any admin registration/creation attempts
       if (urlPath === "/admin/register" || urlPath === "/admin/create" || urlPath === "/admin/signup" || urlPath === "/admin/grant") {
-        recordAudit("BLOCKED_SECOND_ADMIN_CREATION", `Attempted ${req.method} ${urlPath}`, ip);
+        await recordAudit({
+          eventType: "BLOCKED_SECOND_ADMIN_CREATION",
+          outcome: "blocked",
+          details: `Blocked ${req.method} request to disabled admin provisioning route`,
+          ip,
+          deviceInfo: sanitizeDeviceInfo(null, req),
+        });
         return sendJson(res, 403, { error: "Single-administrator policy: creating additional administrator accounts is permanently disabled." });
       }
 
@@ -291,10 +363,20 @@ function createAdminAuthService(options = {}) {
           return sendJson(res, 503, { error: "Administrator authentication backend is not provisioned on the server." });
         }
 
+        const body = await readJsonBody(req);
+        const deviceInfo = sanitizeDeviceInfo(body.deviceInfo, req);
+
         const retryMs = checkLockout(ip);
         if (retryMs > 0) {
           const retrySec = Math.max(1, Math.ceil(retryMs / 1000));
-          recordAudit("ADMIN_LOGIN_LOCKED_OUT", "Rejected attempt during active lockout window", ip);
+          await recordAudit({
+            eventType: "ADMIN_LOGIN_LOCKED_OUT",
+            outcome: "locked_out",
+            usernameMatched: false,
+            details: "Rejected login attempt during active lockout window",
+            ip,
+            deviceInfo,
+          });
           return sendJson(
             res,
             429,
@@ -306,7 +388,6 @@ function createAdminAuthService(options = {}) {
           );
         }
 
-        const body = await readJsonBody(req);
         const submittedUsername = typeof body.username === "string" ? body.username.trim() : "";
         const submittedPassword = typeof body.password === "string" ? body.password : "";
 
@@ -316,7 +397,14 @@ function createAdminAuthService(options = {}) {
 
         if (!usernameMatches || !passwordMatches) {
           const lockedNow = recordFailedAttempt(ip);
-          recordAudit("ADMIN_LOGIN_FAILED", lockedNow ? "Invalid credentials (lockout triggered)" : "Invalid credentials", ip);
+          await recordAudit({
+            eventType: lockedNow ? "ADMIN_LOGIN_LOCKED_OUT" : "ADMIN_LOGIN_FAILED",
+            outcome: lockedNow ? "locked_out" : "failed",
+            usernameMatched: usernameMatches,
+            details: lockedNow ? "Invalid credentials (lockout triggered)" : "Invalid administrator credentials",
+            ip,
+            deviceInfo,
+          });
           if (lockedNow) {
             const retrySec = Math.max(1, Math.ceil(config.lockoutMs / 1000));
             return sendJson(
@@ -362,7 +450,14 @@ function createAdminAuthService(options = {}) {
           sessionVersion,
         });
 
-        recordAudit("ADMIN_LOGIN_SUCCESS", "Single owner administrator authenticated", ip);
+        await recordAudit({
+          eventType: "ADMIN_LOGIN_SUCCESS",
+          outcome: "success",
+          usernameMatched: true,
+          details: "Single owner administrator authenticated",
+          ip,
+          deviceInfo,
+        });
 
         const maxAgeSec = Math.max(1, Math.floor(config.sessionTtlMs / 1000));
         return sendJson(
@@ -446,9 +541,18 @@ function createAdminAuthService(options = {}) {
         if (!authCheck.ok) {
           return sendJson(res, authCheck.statusCode, { error: authCheck.error });
         }
+        const body = await readJsonBody(req).catch(() => ({}));
+        const deviceInfo = sanitizeDeviceInfo(body.deviceInfo, req);
         activeSessions.delete(authCheck.session.sessionId);
         await firebaseBridge.revokeRefreshTokens(SINGLE_ADMIN_UID).catch(() => {});
-        recordAudit("ADMIN_LOGOUT", "Administrator signed out and session invalidated", ip);
+        await recordAudit({
+          eventType: "ADMIN_LOGOUT",
+          outcome: "success",
+          usernameMatched: true,
+          details: "Administrator signed out and session invalidated",
+          ip,
+          deviceInfo,
+        });
         return sendJson(
           res,
           200,
@@ -468,6 +572,9 @@ function createAdminAuthService(options = {}) {
           return sendJson(res, 503, { error: "Owner recovery key is not configured on the server." });
         }
 
+        const body = await readJsonBody(req);
+        const deviceInfo = sanitizeDeviceInfo(body.deviceInfo, req);
+
         const retryMs = checkLockout(ip);
         if (retryMs > 0) {
           const retrySec = Math.max(1, Math.ceil(retryMs / 1000));
@@ -479,7 +586,6 @@ function createAdminAuthService(options = {}) {
           );
         }
 
-        const body = await readJsonBody(req);
         const submittedUsername = typeof body.username === "string" ? body.username.trim() : "";
         const submittedRecoveryKey = typeof body.recoveryKey === "string" ? body.recoveryKey.trim() : "";
         const newPassword = typeof body.newPassword === "string" ? body.newPassword : "";
@@ -489,7 +595,14 @@ function createAdminAuthService(options = {}) {
 
         if (!userOk || !keyOk) {
           recordFailedAttempt(ip);
-          recordAudit("ADMIN_RECOVERY_FAILED", "Invalid owner recovery credentials", ip);
+          await recordAudit({
+            eventType: "ADMIN_RECOVERY_FAILED",
+            outcome: "failed",
+            usernameMatched: userOk,
+            details: "Invalid owner recovery credentials",
+            ip,
+            deviceInfo,
+          });
           return sendJson(res, 401, { error: "Invalid administrator recovery credentials." });
         }
 
@@ -503,7 +616,14 @@ function createAdminAuthService(options = {}) {
         activeSessions.clear(); // Immediately invalidate ALL existing admin sessions
         clearThrottle(ip);
         await firebaseBridge.revokeRefreshTokens(SINGLE_ADMIN_UID).catch(() => {});
-        recordAudit("ADMIN_PASSWORD_RECOVERED", "Password rotated via owner recovery key; all active sessions invalidated", ip);
+        await recordAudit({
+          eventType: "ADMIN_PASSWORD_RECOVERED",
+          outcome: "success",
+          usernameMatched: true,
+          details: "Password rotated via owner recovery key; all active sessions invalidated",
+          ip,
+          deviceInfo,
+        });
 
         return sendJson(
           res,

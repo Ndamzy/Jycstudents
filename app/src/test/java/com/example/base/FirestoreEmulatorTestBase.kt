@@ -163,6 +163,49 @@ abstract class FirestoreEmulatorTestBase {
       }
     }
 
+  protected suspend fun provisionEmailUserInEmulator(
+    email: String,
+    password: String,
+    customAttributesJson: String? = null,
+  ): String =
+    withContext(Dispatchers.IO) {
+      withTimeout(AUTH_TIMEOUT_MS) {
+        val result =
+          try {
+            auth.createUserWithEmailAndPassword(email, password).await()
+          } catch (_: Exception) {
+            auth.signInWithEmailAndPassword(email, password).await()
+          }
+        val user = checkNotNull(result.user) { "Provisioned user missing" }
+        val uid = user.uid
+        val url =
+          java.net.URL(
+            "http://$EMULATOR_HOST:$AUTH_PORT/identitytoolkit.googleapis.com/v1/projects/$PROJECT_ID/accounts:update"
+          )
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+          requestMethod = "POST"
+          doOutput = true
+          setRequestProperty("Content-Type", "application/json")
+          setRequestProperty("Authorization", "Bearer owner")
+        }
+        val payload =
+          JSONObject().apply {
+            put("localId", uid)
+            put("emailVerified", true)
+            if (customAttributesJson != null) {
+              put("customAttributes", customAttributesJson)
+            }
+          }
+        conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+        check(conn.responseCode in 200..299) {
+          "Auth emulator customAttributes update failed: HTTP ${conn.responseCode}"
+        }
+        conn.disconnect()
+        auth.signOut()
+        uid
+      }
+    }
+
   protected fun Throwable.unwrapFirestoreException(): FirebaseFirestoreException? {
     var current: Throwable? = this
     while (current != null) {

@@ -247,6 +247,110 @@ test("Single-Administrator Isolation: cannot create 2nd admin, escalate student 
   await assertFails(adminDb.collection("admin_auth_audit").get());
 });
 
+test("Firebase Email/Password Mapped Admin (admin@jy-computers.com): requires server custom claims & still blocks 2nd admin", async () => {
+  const mappedAdminClaimsDb = testEnv.authenticatedContext("console_uid_admin_1", {
+    email: "admin@jy-computers.com",
+    email_verified: true,
+    jySingleAdmin: true,
+    role: "admin",
+    firebase: { sign_in_provider: "password" },
+  }).firestore();
+
+  const mappedAdminNoClaimsDb = testEnv.authenticatedContext("console_uid_admin_unclaimed", {
+    email: "admin@jy-computers.com",
+    email_verified: true,
+    firebase: { sign_in_provider: "password" },
+  }).firestore();
+
+  const studentWithAdminClaimSpoofDb = testEnv.authenticatedContext("student_other_email", {
+    email: "student@example.com",
+    email_verified: true,
+    jySingleAdmin: true,
+    role: "admin",
+    firebase: { sign_in_provider: "password" },
+  }).firestore();
+
+  const progDoc = {
+    title: "Mapped Admin Course",
+    description: "Valid admin write",
+    duration: "1 Month",
+    feeNaira: 30000,
+    category: "Foundation",
+    level: "Beginner",
+    instructorUid: "",
+    instructorName: "Staff",
+    scheduleText: "Mon - Wed",
+    active: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  // Mapped admin WITH custom claims succeeds on admin collections & own /admins/{uid}
+  await assertSucceeds(mappedAdminClaimsDb.collection("programmes").doc("mapped_prog").set(progDoc));
+  await assertSucceeds(
+    mappedAdminClaimsDb.collection("admins").doc("console_uid_admin_1").set({
+      uid: "console_uid_admin_1",
+      email: "admin@jy-computers.com",
+      fullName: "Administrator",
+      createdAt: serverTimestamp(),
+    })
+  );
+  // Still CANNOT create a second admin under another UID
+  await assertFails(
+    mappedAdminClaimsDb.collection("admins").doc("another_uid_2").set({
+      uid: "another_uid_2",
+      email: "second@jy-computers.com",
+      fullName: "Second",
+      createdAt: serverTimestamp(),
+    })
+  );
+
+  // Mapped email WITHOUT custom claims is strictly DENIED
+  await assertFails(mappedAdminNoClaimsDb.collection("programmes").doc("unclaimed_prog").set(progDoc));
+  // Unmapped student email even with claims cannot write admin docs
+  await assertFails(studentWithAdminClaimSpoofDb.collection("programmes").doc("spoof_prog").set(progDoc));
+});
+
+test("Write-only Admin Auth Audit Log (/admin_auth_audit): denies ALL client reads, creates, updates, and deletes (including Single Owner Admin)", async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("admin_auth_audit").doc("audit_seed_1").set({
+      eventType: "ADMIN_LOGIN_SUCCESS",
+      outcome: "success",
+      targetUid: ADMIN_UID,
+      usernameMatched: true,
+      reason: "Seeded by server Admin SDK",
+      clientIp: "127.0.0.1",
+      deviceInfo: { platform: "Android", model: "Pixel 8" },
+      timestampIso: "2026-11-15T12:00:00.000Z",
+      createdAt: serverTimestamp(),
+    });
+  });
+
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
+
+  const forgedEntry = {
+    eventType: "ADMIN_LOGIN_SUCCESS",
+    outcome: "success",
+    targetUid: ADMIN_UID,
+    usernameMatched: true,
+    reason: "Client-forged audit attempt",
+    clientIp: "0.0.0.0",
+    deviceInfo: { platform: "Android" },
+    timestampIso: "2026-11-15T12:05:00.000Z",
+    createdAt: serverTimestamp(),
+  };
+
+  for (const db of [unauthDb, aliceDb, adminDb]) {
+    await assertFails(db.collection("admin_auth_audit").doc("audit_seed_1").get());
+    await assertFails(db.collection("admin_auth_audit").get());
+    await assertFails(db.collection("admin_auth_audit").doc("forged_1").set(forgedEntry));
+    await assertFails(db.collection("admin_auth_audit").doc("audit_seed_1").update({ outcome: "tampered" }));
+    await assertFails(db.collection("admin_auth_audit").doc("audit_seed_1").delete());
+  }
+});
+
 test("Payments: student can create pending OPay transfer, cannot create cash/approved payment, cannot read Bob's payments", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();

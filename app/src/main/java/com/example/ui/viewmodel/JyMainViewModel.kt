@@ -215,7 +215,7 @@ class JyMainViewModel(
 
   fun validateActiveAdminSession(onExpired: () -> Unit) {
     if (!_isAdminVerified.value) return
-    if (currentUserId != JyCatalogDefaults.SINGLE_ADMIN_UID) {
+    if (!JyCatalogDefaults.isOwnerAdminIdentity(currentUserId, currentUserEmail)) {
       _isAdminVerified.value = false
       onExpired()
       return
@@ -229,13 +229,23 @@ class JyMainViewModel(
       }
       return
     }
-    if (AdminAuthClient.isBackendConfigured() && AdminAuthClient.hasActiveSession()) {
+    if (AdminAuthClient.hasActiveSession()) {
       viewModelScope.launch {
         val valid = AdminAuthClient.refreshSession()
         if (!valid) {
           AdminAuthClient.logout()
           _isAdminVerified.value = false
           _feedbackMessage.value = "Administrator session ended. Please sign in again."
+          onExpired()
+        }
+      }
+    } else if (!AdminAuthClient.isBackendConfigured()) {
+      viewModelScope.launch {
+        val stillAdmin = profileRepo.isUidAdmin(currentUserId)
+        if (!stillAdmin) {
+          AdminAuthClient.logout()
+          _isAdminVerified.value = false
+          _feedbackMessage.value = "Administrator authorization could not be verified."
           onExpired()
         }
       }

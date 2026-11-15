@@ -149,10 +149,12 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
   suspend fun isUidAdmin(uid: String): Boolean {
     return try {
       val currentUser = auth.currentUser ?: return false
-      if (currentUser.uid != uid || uid != JyCatalogDefaults.SINGLE_ADMIN_UID) {
+      if (currentUser.uid != uid || !JyCatalogDefaults.isOwnerAdminIdentity(uid, currentUser.email)) {
         return false
       }
-      val tokenResult = currentUser.getIdToken(false).await()
+      val tokenResult =
+        runCatching { currentUser.getIdToken(true).await() }
+          .getOrElse { currentUser.getIdToken(false).await() }
       val claims = tokenResult.claims
       val hasSingleAdminClaim = claims["jySingleAdmin"] == true
       val hasAdminRoleClaim = claims["role"] == "admin"
@@ -422,7 +424,7 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     fullName: String,
     email: String,
   ) {
-    if (uid != JyCatalogDefaults.SINGLE_ADMIN_UID) return
+    if (!JyCatalogDefaults.isOwnerAdminIdentity(uid, email)) return
     val dirRef = db.collection("directory").document(uid)
     try {
       if (!dirRef.get().await().exists()) {
@@ -706,7 +708,7 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     if (role !in listOf("student", "instructor")) {
       return Result.failure(IllegalArgumentException("Unsupported role: $role"))
     }
-    if (targetUid == JyCatalogDefaults.SINGLE_ADMIN_UID) {
+    if (JyCatalogDefaults.isOwnerAdminIdentity(targetUid, email)) {
       return Result.failure(SecurityException("Cannot reassign the owner administrator role."))
     }
     val userRef = db.collection("users").document(targetUid)
