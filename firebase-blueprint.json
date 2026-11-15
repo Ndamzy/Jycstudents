@@ -30,7 +30,7 @@
     },
     "AdminRole": {
       "title": "AdminRole",
-      "description": "Administrator registry entry keyed by user UID.",
+      "description": "Single exclusive owner administrator registry entry (uid = jy_single_owner_admin).",
       "type": "object",
       "properties": {
         "uid": { "type": "string" },

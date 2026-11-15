@@ -16,13 +16,15 @@ service cloud.firestore {
     function isSignedIn() { return request.auth != null; }
 
     function isAdmin() {
-      return isSignedIn() && (
-        ('email_verified' in request.auth.token &&
-         request.auth.token.email_verified == true &&
-         'email' in request.auth.token &&
-         request.auth.token.email == 'joshua.dangana@gmail.com') ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-      );
+      return isSignedIn() &&
+        request.auth.uid == 'jy_single_owner_admin' &&
+        ('jySingleAdmin' in request.auth.token) &&
+        request.auth.token.jySingleAdmin == true &&
+        ('role' in request.auth.token) &&
+        request.auth.token.role == 'admin' &&
+        (!('firebase' in request.auth.token) ||
+         !('sign_in_provider' in request.auth.token.firebase) ||
+         request.auth.token.firebase.sign_in_provider != 'google.com');
     }
 
     function isInstructor() {
@@ -54,7 +56,7 @@ service cloud.firestore {
     }
 
     function isValidAdminRole(data) {
-      return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+      return data.uid == 'jy_single_owner_admin' &&
              data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
              (!('fullName' in data) || (data.fullName is string && data.fullName.size() <= 120)) &&
              data.createdAt is timestamp && data.createdAt <= request.time;
@@ -358,11 +360,25 @@ service cloud.firestore {
     }
 
     match /admins/{uid} {
-      allow get: if isSignedIn() && isValidId(uid) && (request.auth.uid == uid || isAdmin());
+      allow get: if isAdmin() && isValidId(uid) && uid == 'jy_single_owner_admin';
       allow list: if isAdmin();
-      allow create: if isAdmin() && isValidId(uid) && isValidAdminRole(incoming());
-      allow update: if isAdmin() && isValidId(uid) && isValidAdminRole(incoming()) && incoming().createdAt == existing().createdAt;
-      allow delete: if isAdmin() && isValidId(uid);
+      allow create: if isAdmin() && isValidId(uid) && uid == 'jy_single_owner_admin' && isValidAdminRole(incoming());
+      allow update: if isAdmin() && isValidId(uid) && uid == 'jy_single_owner_admin' && isValidAdminRole(incoming()) && incoming().createdAt == existing().createdAt;
+      allow delete: if false;
+    }
+
+    // Server-only security collections (zero client access)
+    match /admin_security/{docId} {
+      allow read, write: if false;
+    }
+    match /admin_sessions/{sessionId} {
+      allow read, write: if false;
+    }
+    match /admin_login_throttle/{throttleKey} {
+      allow read, write: if false;
+    }
+    match /admin_auth_audit/{logId} {
+      allow read, write: if false;
     }
 
     match /instructors/{uid} {
@@ -393,7 +409,7 @@ service cloud.firestore {
                          'registrationDate', 'approvalStatus', 'paymentStatus', 'courseProgressPercent',
                          'status', 'createdAt', 'updatedAt'
                        ]) && (
-        isAdmin() ||
+        (isAdmin() && (uid == 'jy_single_owner_admin' || incoming().role in ['student', 'instructor'])) ||
         (request.auth.uid == uid &&
          incoming().userId == request.auth.uid &&
          incoming().role == 'student' &&
@@ -405,7 +421,7 @@ service cloud.firestore {
       allow update: if isSignedIn() && isValidId(uid) && isValidUserProfile(incoming()) &&
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt && (
-        isAdmin() ||
+        (isAdmin() && (uid == 'jy_single_owner_admin' || incoming().role in ['student', 'instructor'])) ||
         (request.auth.uid == uid &&
          incoming().role == existing().role &&
          incoming().status == existing().status &&
@@ -438,11 +454,12 @@ service cloud.firestore {
                          'userId', 'fullName', 'studentIdNumber', 'role',
                          'selectedProgrammeTitle', 'isOnline', 'lastSeenAt', 'updatedAt'
                        ]) && (
-        isAdmin() || (request.auth.uid == uid && incoming().userId == request.auth.uid && incoming().role == 'student')
+        (isAdmin() && (uid == 'jy_single_owner_admin' || incoming().role in ['student', 'instructor'])) ||
+        (request.auth.uid == uid && incoming().userId == request.auth.uid && incoming().role == 'student')
       );
       allow update: if isSignedIn() && isValidId(uid) && isValidDirectoryEntry(incoming()) &&
                        incoming().userId == existing().userId && (
-        isAdmin() ||
+        (isAdmin() && (uid == 'jy_single_owner_admin' || incoming().role in ['student', 'instructor'])) ||
         (request.auth.uid == uid && incoming().role == existing().role &&
          incoming().diff(existing()).affectedKeys().hasOnly([
            'fullName', 'selectedProgrammeTitle', 'isOnline', 'lastSeenAt', 'updatedAt'

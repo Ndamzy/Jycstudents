@@ -19,6 +19,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.remote.AdminAuthClient
 import com.example.data.remote.GoogleAuthHelper
 import com.example.data.repository.CommunicationRepository
 import com.example.data.repository.CourseAndAcademicRepository
@@ -179,6 +180,7 @@ private fun JyComputersRootContent(
         onThemeModeChange = onThemeModeChange,
         onSignOut = {
           preAuthRoute = AppRoutes.WELCOME
+          scope.launch { AdminAuthClient.logout() }
           GoogleAuthHelper.signOut(credentialManager = credentialManager, scope = scope)
         },
       )

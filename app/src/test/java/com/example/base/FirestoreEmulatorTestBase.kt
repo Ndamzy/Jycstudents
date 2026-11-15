@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Before
 import org.junit.runner.RunWith
@@ -89,13 +90,58 @@ abstract class FirestoreEmulatorTestBase {
       }
     }
 
-  protected suspend fun signInVerifiedAdminUser(
-    email: String = "joshua.dangana@gmail.com"
-  ): String =
+  protected fun createEmulatorCustomToken(
+    uid: String,
+    claims: Map<String, Any> = emptyMap(),
+  ): String {
+    val nowSec = System.currentTimeMillis() / 1000L
+    val headerJson = JSONObject().put("alg", "none").put("typ", "JWT").toString()
+    val claimsJson = JSONObject(claims)
+    val payloadJson =
+      JSONObject()
+        .put("iss", "firebase-auth-emulator@example.com")
+        .put("sub", "firebase-auth-emulator@example.com")
+        .put(
+          "aud",
+          "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit",
+        )
+        .put("iat", nowSec)
+        .put("exp", nowSec + 3600L)
+        .put("uid", uid)
+        .put("claims", claimsJson)
+        .toString()
+
+    val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+    val headerB64 = android.util.Base64.encodeToString(headerJson.toByteArray(Charsets.UTF_8), flags)
+    val payloadB64 = android.util.Base64.encodeToString(payloadJson.toByteArray(Charsets.UTF_8), flags)
+    return "$headerB64.$payloadB64."
+  }
+
+  protected suspend fun signInSingleOwnerAdmin(): String =
+    withContext(Dispatchers.IO) {
+      withTimeout(AUTH_TIMEOUT_MS) {
+        val token =
+          createEmulatorCustomToken(
+            uid = com.example.data.model.JyCatalogDefaults.SINGLE_ADMIN_UID,
+            claims =
+              mapOf(
+                "jySingleAdmin" to true,
+                "role" to "admin",
+                "sessionVersion" to 1,
+              ),
+          )
+        val result = auth.signInWithCustomToken(token).await()
+        val user = checkNotNull(result.user) { "Single owner admin custom token auth failed" }
+        user.getIdToken(true).await()
+        user.uid
+      }
+    }
+
+  protected suspend fun signInVerifiedEmailUser(email: String): String =
     withContext(Dispatchers.IO) {
       withTimeout(AUTH_TIMEOUT_MS) {
         val uid = signInTestUser(email)
-        val user = checkNotNull(auth.currentUser) { "Admin user not signed in" }
+        val user = checkNotNull(auth.currentUser) { "User not signed in" }
         val url =
           java.net.URL(
             "http://$EMULATOR_HOST:$AUTH_PORT/identitytoolkit.googleapis.com/v1/projects/$PROJECT_ID/accounts:update"

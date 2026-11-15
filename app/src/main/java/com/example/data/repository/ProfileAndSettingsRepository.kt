@@ -40,7 +40,7 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
 
   private fun requireUserId(): String =
     auth.currentUser?.uid
-      ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
+      ?: throw IllegalStateException("User must be signed in before accessing Firestore.")
 
   private fun normalizeInstitutionSettings(raw: InstitutionSettings): InstitutionSettings {
     val isLegacyAccount =
@@ -148,12 +148,16 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
 
   suspend fun isUidAdmin(uid: String): Boolean {
     return try {
-      val userEmail = auth.currentUser?.email
-      val isVerified = auth.currentUser?.isEmailVerified == true
-      if (isVerified && userEmail.equals(JyCatalogDefaults.BOOTSTRAP_ADMIN_EMAIL, ignoreCase = true)) {
-        return true
+      val currentUser = auth.currentUser ?: return false
+      if (currentUser.uid != uid || uid != JyCatalogDefaults.SINGLE_ADMIN_UID) {
+        return false
       }
-      db.collection("admins").document(uid).get().await().exists()
+      val tokenResult = currentUser.getIdToken(false).await()
+      val claims = tokenResult.claims
+      val hasSingleAdminClaim = claims["jySingleAdmin"] == true
+      val hasAdminRoleClaim = claims["role"] == "admin"
+      val signInProvider = tokenResult.signInProvider
+      hasSingleAdminClaim && hasAdminRoleClaim && signInProvider != "google.com"
     } catch (_: Exception) {
       false
     }
@@ -418,10 +422,11 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     fullName: String,
     email: String,
   ) {
+    if (uid != JyCatalogDefaults.SINGLE_ADMIN_UID) return
     val dirRef = db.collection("directory").document(uid)
     try {
       if (!dirRef.get().await().exists()) {
-        val safeName = fullName.trim().ifBlank { email.substringBefore('@').ifBlank { "JY-Computers Admin" } }
+        val safeName = fullName.trim().ifBlank { JyCatalogDefaults.SINGLE_ADMIN_ROLE_LABEL }
         dirRef
           .set(
             mapOf(
@@ -693,10 +698,20 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     actorName: String = "Administrator",
   ): Result<Unit> {
     val actorUid = requireUserId()
+    if (role == "admin") {
+      return Result.failure(
+        SecurityException("Single-administrator policy: creating additional administrator accounts is disabled.")
+      )
+    }
+    if (role !in listOf("student", "instructor")) {
+      return Result.failure(IllegalArgumentException("Unsupported role: $role"))
+    }
+    if (targetUid == JyCatalogDefaults.SINGLE_ADMIN_UID) {
+      return Result.failure(SecurityException("Cannot reassign the owner administrator role."))
+    }
     val userRef = db.collection("users").document(targetUid)
     val dirRef = db.collection("directory").document(targetUid)
     val instRef = db.collection("instructors").document(targetUid)
-    val adminRef = db.collection("admins").document(targetUid)
     return try {
       val batch = db.batch()
       batch.update(userRef, mapOf("role" to role, "updatedAt" to FieldValue.serverTimestamp()))
@@ -735,26 +750,7 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
             "updatedAt" to FieldValue.serverTimestamp(),
           ),
         )
-        if (adminRef.get().await().exists()) {
-          batch.delete(adminRef)
-        }
-      } else if (role == "admin") {
-        batch.set(
-          adminRef,
-          mapOf(
-            "uid" to targetUid,
-            "email" to email.trim(),
-            "fullName" to fullName.trim(),
-            "createdAt" to FieldValue.serverTimestamp(),
-          ),
-        )
-        if (instRef.get().await().exists()) {
-          batch.delete(instRef)
-        }
       } else {
-        if (adminRef.get().await().exists()) {
-          batch.delete(adminRef)
-        }
         if (instRef.get().await().exists()) {
           batch.delete(instRef)
         }

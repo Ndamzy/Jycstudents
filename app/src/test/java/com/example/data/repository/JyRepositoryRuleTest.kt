@@ -218,7 +218,7 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
     val paymentId = transferRes.getOrThrow()
 
     // Admin reviews & approves the payment
-    val adminUid = signInVerifiedAdminUser()
+    val adminUid = signInSingleOwnerAdmin()
     val adminServiceSave = withTimeout(DEFAULT_TIMEOUT_MS) { financeRepo.saveService(nyscService) }
     assertTrue("Admin saving service failed: ${adminServiceSave.exceptionOrNull()}", adminServiceSave.isSuccess)
 
@@ -373,7 +373,7 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
     assertTrue("Instructor candidate reg failed: ${instReg.exceptionOrNull()}", instReg.isSuccess)
 
     // Admin creates a programme (initially unassigned) and enrolls the student
-    signInVerifiedAdminUser()
+    signInSingleOwnerAdmin()
     val progId = "prog_sync_${UUID.randomUUID().toString().take(6)}"
     val prog =
       Programme(

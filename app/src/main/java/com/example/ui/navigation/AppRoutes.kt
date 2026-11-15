@@ -158,6 +158,9 @@ object AppRoutes {
   const val PROFILE = "profile"
   const val ADMIN_SETTINGS = "admin_settings"
   const val REPORTS = "reports"
+
+  val ADMIN_ONLY_ROUTES =
+    setOf(ADMIN_DASHBOARD, ADMIN_STUDENTS, ADMIN_ROLES, ADMIN_SETTINGS, REPORTS)
 }
 
 private data class NavDestination(
@@ -354,6 +357,16 @@ fun AuthenticatedAppShell(
       var showWorkspaceMenu by remember { mutableStateOf(false) }
       val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
+      LaunchedEffect(currentRoute, isAdminVerified) {
+        if (currentRoute in AppRoutes.ADMIN_ONLY_ROUTES && !isAdminVerified) {
+          mainVm.postFeedback("Access denied: Administrator privileges required.")
+          currentRoute = homeRoute
+        } else if (isAdminVerified) {
+          com.example.data.remote.AdminAuthClient.recordUserActivity()
+          mainVm.validateActiveAdminSession(onExpired = onSignOut)
+        }
+      }
+
       if (currentRoute != homeRoute) {
         BackHandler {
           chatVm.closeRoom()
@@ -402,7 +415,7 @@ fun AuthenticatedAppShell(
               NavDestination(AppRoutes.PAYMENTS, "Payments", Icons.Filled.Payments),
               NavDestination(AppRoutes.REPORTS, "Reports", Icons.Filled.Analytics),
               NavDestination(AppRoutes.NOTIFICATIONS, "Notifications", Icons.Filled.Notifications),
-              NavDestination(AppRoutes.ADMIN_ROLES, "Administrators", Icons.Filled.AdminPanelSettings),
+              NavDestination(AppRoutes.ADMIN_ROLES, "Instructors & Logs", Icons.Filled.AdminPanelSettings),
               NavDestination(AppRoutes.ADMIN_SETTINGS, "Settings", Icons.Filled.Settings),
             )
           "instructor" ->
@@ -475,7 +488,7 @@ fun AuthenticatedAppShell(
             add(Triple(AppRoutes.PROFILE, "My Profile", Icons.Filled.Person))
             if (isAdminVerified) {
               add(Triple(AppRoutes.REPORTS, "Reports & Export", Icons.Filled.Analytics))
-              add(Triple(AppRoutes.ADMIN_ROLES, "Administrators", Icons.Filled.AdminPanelSettings))
+              add(Triple(AppRoutes.ADMIN_ROLES, "Instructors & Logs", Icons.Filled.AdminPanelSettings))
               add(Triple(AppRoutes.ADMIN_SETTINGS, "Settings", Icons.Filled.Settings))
             }
           }
@@ -733,59 +746,71 @@ fun AuthenticatedAppShell(
                     )
 
                   AppRoutes.ADMIN_DASHBOARD ->
-                    AdminDashboardScreen(
-                      settings = settings,
-                      allUsers = allUsersAdmin,
-                      programmes = programmes,
-                      enrollments = enrollments,
-                      serviceRequests = serviceRequests,
-                      payments = payments,
-                      announcements = announcements,
-                      activityLogs = activityLogsAdmin,
-                      onApproveStudent = { uid, name, approval ->
-                        mainVm.approveOrRejectStudentAdmin(uid, name, approval)
-                      },
-                      onOpenAddStudent = { currentRoute = AppRoutes.REGISTRATION },
-                      onNotify = { msg -> mainVm.postFeedback(msg) },
-                      onNavigate = { route -> currentRoute = route },
-                    )
+                    if (!isAdminVerified) {
+                      AdminAccessDeniedScreen(onReturnHome = { currentRoute = homeRoute })
+                    } else {
+                      AdminDashboardScreen(
+                        settings = settings,
+                        allUsers = allUsersAdmin,
+                        programmes = programmes,
+                        enrollments = enrollments,
+                        serviceRequests = serviceRequests,
+                        payments = payments,
+                        announcements = announcements,
+                        activityLogs = activityLogsAdmin,
+                        onApproveStudent = { uid, name, approval ->
+                          mainVm.approveOrRejectStudentAdmin(uid, name, approval)
+                        },
+                        onOpenAddStudent = { currentRoute = AppRoutes.REGISTRATION },
+                        onNotify = { msg -> mainVm.postFeedback(msg) },
+                        onNavigate = { route -> currentRoute = route },
+                      )
+                    }
 
                   AppRoutes.ADMIN_STUDENTS ->
-                    AdminStudentsScreen(
-                      settings = settings,
-                      allUsers = allUsersAdmin,
-                      programmes = programmes,
-                      enrollments = enrollments,
-                      isBusy = actionBusy,
-                      onOpenAddStudent = { currentRoute = AppRoutes.REGISTRATION },
-                      onApproveOrReject = { uid, name, approval ->
-                        mainVm.approveOrRejectStudentAdmin(uid, name, approval)
-                      },
-                      onUpdateStatus = { uid, status, name ->
-                        mainVm.updateStudentStatusAdmin(uid, status, name)
-                      },
-                      onEditStudent = { updated -> mainVm.editStudentAdmin(updated) },
-                      onUpdateProgress = { uid, name, pct, statusOverride ->
-                        mainVm.updateStudentProgressAdmin(uid, name, pct, statusOverride)
-                      },
-                      onAssignCourse = { student, prog ->
-                        mainVm.assignStudentToCourseAdmin(student, prog)
-                      },
-                      onDeleteStudent = { uid, name -> mainVm.deleteStudentAdmin(uid, name) },
-                      onNotify = { msg -> mainVm.postFeedback(msg) },
-                    )
+                    if (!isAdminVerified) {
+                      AdminAccessDeniedScreen(onReturnHome = { currentRoute = homeRoute })
+                    } else {
+                      AdminStudentsScreen(
+                        settings = settings,
+                        allUsers = allUsersAdmin,
+                        programmes = programmes,
+                        enrollments = enrollments,
+                        isBusy = actionBusy,
+                        onOpenAddStudent = { currentRoute = AppRoutes.REGISTRATION },
+                        onApproveOrReject = { uid, name, approval ->
+                          mainVm.approveOrRejectStudentAdmin(uid, name, approval)
+                        },
+                        onUpdateStatus = { uid, status, name ->
+                          mainVm.updateStudentStatusAdmin(uid, status, name)
+                        },
+                        onEditStudent = { updated -> mainVm.editStudentAdmin(updated) },
+                        onUpdateProgress = { uid, name, pct, statusOverride ->
+                          mainVm.updateStudentProgressAdmin(uid, name, pct, statusOverride)
+                        },
+                        onAssignCourse = { student, prog ->
+                          mainVm.assignStudentToCourseAdmin(student, prog)
+                        },
+                        onDeleteStudent = { uid, name -> mainVm.deleteStudentAdmin(uid, name) },
+                        onNotify = { msg -> mainVm.postFeedback(msg) },
+                      )
+                    }
 
                   AppRoutes.ADMIN_ROLES ->
-                    AdminRolesAndLogsScreen(
-                      allUsers = allUsersAdmin,
-                      programmes = programmes,
-                      activityLogs = activityLogsAdmin,
-                      onAssignRole = { uid, fullName, email, role, spec, courseIds ->
-                        mainVm.assignUserRoleAdmin(uid, fullName, email, role, spec, courseIds)
-                      },
-                      currentUserId = mainVm.currentUserId,
-                      instructors = instructorsAdmin,
-                    )
+                    if (!isAdminVerified) {
+                      AdminAccessDeniedScreen(onReturnHome = { currentRoute = homeRoute })
+                    } else {
+                      AdminRolesAndLogsScreen(
+                        allUsers = allUsersAdmin,
+                        programmes = programmes,
+                        activityLogs = activityLogsAdmin,
+                        onAssignRole = { uid, fullName, email, role, spec, courseIds ->
+                          mainVm.assignUserRoleAdmin(uid, fullName, email, role, spec, courseIds)
+                        },
+                        currentUserId = mainVm.currentUserId,
+                        instructors = instructorsAdmin,
+                      )
+                    }
 
                   AppRoutes.INSTRUCTOR_DASHBOARD ->
                     InstructorDashboardScreen(
@@ -1024,27 +1049,35 @@ fun AuthenticatedAppShell(
                     )
 
                   AppRoutes.ADMIN_SETTINGS ->
-                    AdminSettingsScreen(
-                      settings = settings,
-                      isBusy = actionBusy,
-                      onSaveSettings = { updated -> mainVm.saveInstitutionSettings(updated) },
-                      onSeedDefaults = { mainVm.seedDefaultProgrammesNow() },
-                      onOpenServices = { currentRoute = AppRoutes.SERVICES },
-                      onNotify = { msg -> mainVm.postFeedback(msg) },
-                    )
+                    if (!isAdminVerified) {
+                      AdminAccessDeniedScreen(onReturnHome = { currentRoute = homeRoute })
+                    } else {
+                      AdminSettingsScreen(
+                        settings = settings,
+                        isBusy = actionBusy,
+                        onSaveSettings = { updated -> mainVm.saveInstitutionSettings(updated) },
+                        onSeedDefaults = { mainVm.seedDefaultProgrammesNow() },
+                        onOpenServices = { currentRoute = AppRoutes.SERVICES },
+                        onNotify = { msg -> mainVm.postFeedback(msg) },
+                      )
+                    }
 
                   AppRoutes.REPORTS ->
-                    ReportsAndAnalyticsScreen(
-                      settings = settings,
-                      allUsers = allUsersAdmin,
-                      enrollments = enrollments,
-                      payments = payments,
-                      serviceRequests = serviceRequests,
-                      attendance = attendance,
-                      results = results,
-                      certificates = certificates,
-                      onNotify = { msg -> mainVm.postFeedback(msg) },
-                    )
+                    if (!isAdminVerified) {
+                      AdminAccessDeniedScreen(onReturnHome = { currentRoute = homeRoute })
+                    } else {
+                      ReportsAndAnalyticsScreen(
+                        settings = settings,
+                        allUsers = allUsersAdmin,
+                        enrollments = enrollments,
+                        payments = payments,
+                        serviceRequests = serviceRequests,
+                        attendance = attendance,
+                        results = results,
+                        certificates = certificates,
+                        onNotify = { msg -> mainVm.postFeedback(msg) },
+                      )
+                    }
 
                   AppRoutes.REGISTRATION ->
                     StudentRegistrationScreen(
@@ -1236,7 +1269,7 @@ private fun screenTitleForRoute(route: String): String =
     AppRoutes.STUDENT_DASHBOARD -> "Student Dashboard"
     AppRoutes.ADMIN_DASHBOARD -> "Admin Dashboard"
     AppRoutes.ADMIN_STUDENTS -> "Student Management"
-    AppRoutes.ADMIN_ROLES -> "Administrators & Logs"
+    AppRoutes.ADMIN_ROLES -> "Instructors & Audit Logs"
     AppRoutes.INSTRUCTOR_DASHBOARD -> "Instructor Dashboard"
     AppRoutes.COURSE_CATALOGUE -> "Courses & Materials"
     AppRoutes.COURSE_REGISTRATION -> "Course Enrolment"
@@ -1256,3 +1289,42 @@ private fun screenTitleForRoute(route: String): String =
     AppRoutes.REGISTRATION -> "Student Registration"
     else -> "JY-COMPUTERS"
   }
+
+@Composable
+fun AdminAccessDeniedScreen(onReturnHome: () -> Unit) {
+  Box(
+    modifier = Modifier.fillMaxSize().padding(24.dp).testTag("admin_access_denied_card"),
+    contentAlignment = Alignment.Center,
+  ) {
+    Card(
+      shape = RoundedCornerShape(20.dp),
+      colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+    ) {
+      Column(
+        modifier = Modifier.padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+      ) {
+        Icon(
+          Icons.Filled.AdminPanelSettings,
+          contentDescription = "Administrator access denied",
+          tint = MaterialTheme.colorScheme.onErrorContainer,
+        )
+        Text(
+          "Administrator Access Denied",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onErrorContainer,
+        )
+        Text(
+          "This workspace is restricted strictly to the authenticated JY-Computers Owner Administrator.",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.onErrorContainer,
+        )
+        OutlinedButton(onClick = onReturnHome) {
+          Text("Return to My Portal")
+        }
+      }
+    }
+  }
+}

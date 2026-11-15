@@ -352,7 +352,8 @@ data class ActivityLog(
 )
 
 object JyCatalogDefaults {
-  const val BOOTSTRAP_ADMIN_EMAIL = "joshua.dangana@gmail.com"
+  const val SINGLE_ADMIN_UID = "jy_single_owner_admin"
+  const val SINGLE_ADMIN_ROLE_LABEL = "Single Owner Administrator"
   const val OFFICIAL_PRIMARY_PHONE = "08156879310"
   const val OFFICIAL_ALT_PHONE = "09167689248"
   const val OFFICIAL_WHATSAPP_WA_ME = "https://wa.me/2348156879310"

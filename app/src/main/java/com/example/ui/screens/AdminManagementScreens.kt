@@ -776,7 +776,20 @@ fun AdminRolesAndLogsScreen(
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     item {
-      SectionHeader("Administrator & Instructor Roles")
+      SectionHeader("Instructor Role Management & Audit Logs")
+      Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+      ) {
+        Text(
+          "Single-Administrator Policy Active: Only the exclusive owner administrator account is permitted. Creating or promoting additional administrators is permanently disabled.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onPrimaryContainer,
+          modifier = Modifier.padding(12.dp),
+        )
+      }
+      Spacer(modifier = Modifier.height(10.dp))
       OutlinedTextField(
         value = searchQuery,
         onValueChange = { searchQuery = it },
@@ -791,7 +804,7 @@ fun AdminRolesAndLogsScreen(
       item {
         EmptyStateCard(
           title = "No Users Found",
-          message = "Registered accounts will appear here for role management.",
+          message = "Registered accounts will appear here for instructor role assignment.",
         )
       }
     } else {
@@ -829,40 +842,27 @@ fun AdminRolesAndLogsScreen(
                 MaterialTheme.colorScheme.onPrimaryContainer,
               )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-              if (user.role != "admin") {
+            if (user.userId != JyCatalogDefaults.SINGLE_ADMIN_UID) {
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
-                  onClick = {
-                    onAssignRole(
-                      user.userId,
-                      user.fullName,
-                      user.email,
-                      "admin",
-                      "System Administrator",
-                      emptyList(),
-                    )
-                  },
+                  onClick = { instructorDialogTarget = user },
                   modifier = Modifier.weight(1f),
-                ) { Text("Grant Admin") }
-              }
-              OutlinedButton(
-                onClick = { instructorDialogTarget = user },
-                modifier = Modifier.weight(1f),
-              ) { Text(if (user.role == "instructor") "Edit Courses" else "Make Instructor") }
-              if (user.role != "student" && user.userId != currentUserId) {
-                OutlinedButton(
-                  onClick = {
-                    onAssignRole(
-                      user.userId,
-                      user.fullName,
-                      user.email,
-                      "student",
-                      "",
-                      emptyList(),
-                    )
-                  },
-                  modifier = Modifier.weight(1f),
-                ) { Text("Set Student") }
+                ) { Text(if (user.role == "instructor") "Edit Courses" else "Make Instructor") }
+                if (user.role != "student" && user.userId != currentUserId) {
+                  OutlinedButton(
+                    onClick = {
+                      onAssignRole(
+                        user.userId,
+                        user.fullName,
+                        user.email,
+                        "student",
+                        "",
+                        emptyList(),
+                      )
+                    },
+                    modifier = Modifier.weight(1f),
+                  ) { Text("Set Student") }
+                }
               }
             }
           }

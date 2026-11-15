@@ -13,7 +13,12 @@ const PROJECT_ID = process.env.GCP_PROJECT || "demo-no-project";
 const ALICE_UID = "alice_student_1";
 const BOB_UID = "bob_student_2";
 const INSTRUCTOR_UID = "instr_1";
-const ADMIN_UID = "admin_1";
+const ADMIN_UID = "jy_single_owner_admin";
+const SINGLE_ADMIN_CLAIMS = {
+  jySingleAdmin: true,
+  role: "admin",
+  firebase: { sign_in_provider: "custom" },
+};
 
 const [emulatorHost, emulatorPortStr] = (process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8085").split(":");
 const emulatorPort = parseInt(emulatorPortStr, 10);
@@ -124,13 +129,20 @@ test("Privilege escalation blocked: student cannot self-assign admin role, appro
   await assertFails(aliceDb.collection("users").doc(ALICE_UID).set({ ...validStudentProfile(ALICE_UID), isVerified: true }));
 });
 
-test("Email spoofing test: unverified admin email is rejected", async () => {
-  const spoofDb = testEnv.authenticatedContext("spoof_uid", {
+test("Google account & email spoofing test: Google Sign-In joshua.dangana@gmail.com is REJECTED from admin privileges", async () => {
+  const googleAdminSpoofDb = testEnv.authenticatedContext("google_uid_1", {
     email: "joshua.dangana@gmail.com",
-    email_verified: false,
+    email_verified: true,
+    firebase: { sign_in_provider: "google.com" },
   }).firestore();
+  const spoofClaimsDb = testEnv.authenticatedContext("other_uid_with_claims", {
+    jySingleAdmin: true,
+    role: "admin",
+    firebase: { sign_in_provider: "google.com" },
+  }).firestore();
+
   await assertFails(
-    spoofDb.collection("programmes").doc("prog_1").set({
+    googleAdminSpoofDb.collection("programmes").doc("prog_1").set({
       title: "Hacked Course",
       description: "Spoofed",
       duration: "1 Month",
@@ -142,13 +154,12 @@ test("Email spoofing test: unverified admin email is rejected", async () => {
       updatedAt: serverTimestamp(),
     })
   );
+  await assertFails(googleAdminSpoofDb.collection("activity_logs").get());
+  await assertFails(spoofClaimsDb.collection("activity_logs").get());
 });
 
-test("Bootstrapped Admin: verified joshua.dangana@gmail.com can manage programmes and append activity_logs", async () => {
-  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
-    email: "joshua.dangana@gmail.com",
-    email_verified: true,
-  }).firestore();
+test("Single Owner Admin (custom-token jy_single_owner_admin) can manage programmes and append activity_logs", async () => {
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
 
   await assertSucceeds(
     adminDb.collection("programmes").doc("basic_computer").set({
@@ -170,7 +181,7 @@ test("Bootstrapped Admin: verified joshua.dangana@gmail.com can manage programme
   await assertSucceeds(
     adminDb.collection("activity_logs").doc("log_1").set({
       actorUid: ADMIN_UID,
-      actorName: "Joshua Dangana",
+      actorName: "JY Owner Administrator",
       action: "CREATE_COURSE",
       targetId: "basic_computer",
       details: "Created Basic Computer Course",
@@ -194,6 +205,46 @@ test("Bootstrapped Admin: verified joshua.dangana@gmail.com can manage programme
       createdAt: serverTimestamp(),
     })
   );
+});
+
+test("Single-Administrator Isolation: cannot create 2nd admin, escalate student role to admin, or read/write server-only security collections", async () => {
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+
+  // Seed Alice profile
+  await assertSucceeds(aliceDb.collection("users").doc(ALICE_UID).set(validStudentProfile(ALICE_UID)));
+
+  // Attempting to create a second admin doc in /admins/{otherUid} is strictly rejected even by Admin
+  await assertFails(
+    adminDb.collection("admins").doc("second_admin_uid").set({
+      uid: "second_admin_uid",
+      email: "second@example.com",
+      fullName: "Second Admin",
+      createdAt: serverTimestamp(),
+    })
+  );
+  await assertFails(
+    aliceDb.collection("admins").doc(ALICE_UID).set({
+      uid: ALICE_UID,
+      email: "alice@example.com",
+      fullName: "Alice",
+      createdAt: serverTimestamp(),
+    })
+  );
+
+  // Escalating a student account's role to 'admin' is rejected even for Admin & Student
+  await assertFails(aliceDb.collection("users").doc(ALICE_UID).update({ role: "admin", updatedAt: serverTimestamp() }));
+  await assertFails(adminDb.collection("users").doc(ALICE_UID).update({ role: "admin", updatedAt: serverTimestamp() }));
+  await assertFails(adminDb.collection("users").doc(ALICE_UID).set({ ...validStudentProfile(ALICE_UID), role: "admin" }));
+
+  // Instructor role update by admin IS allowed for student
+  await assertSucceeds(adminDb.collection("users").doc(ALICE_UID).update({ role: "instructor", updatedAt: serverTimestamp() }));
+
+  // Client access to server-only collections is completely denied
+  await assertFails(adminDb.collection("admin_security").doc("credentials").get());
+  await assertFails(adminDb.collection("admin_sessions").get());
+  await assertFails(adminDb.collection("admin_login_throttle").get());
+  await assertFails(adminDb.collection("admin_auth_audit").get());
 });
 
 test("Payments: student can create pending OPay transfer, cannot create cash/approved payment, cannot read Bob's payments", async () => {
@@ -331,10 +382,7 @@ test("Chat Room & Messages: direct room isolated to members; public group room a
 });
 
 test("Services & Service Requests: signed-in read, admin manages services, customer creates unpaid pending request", async () => {
-  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
-    email: "joshua.dangana@gmail.com",
-    email_verified: true,
-  }).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
 
@@ -411,10 +459,7 @@ test("Services & Service Requests: signed-in read, admin manages services, custo
 });
 
 test("Universal Service Payment & Payment References: serviceRequestId allowed, reference registry immutable & admin-only", async () => {
-  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
-    email: "joshua.dangana@gmail.com",
-    email_verified: true,
-  }).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
 
   const servicePayment = {

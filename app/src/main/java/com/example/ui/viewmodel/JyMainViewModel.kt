@@ -18,6 +18,7 @@ import com.example.data.model.Payment
 import com.example.data.model.Programme
 import com.example.data.model.ServiceRequest
 import com.example.data.model.UserProfile
+import com.example.data.remote.AdminAuthClient
 import com.example.data.remote.GatewayVerificationResult
 import com.example.data.remote.PaymentGatewayClient
 import com.example.data.remote.unwrapFirestoreMessage
@@ -212,6 +213,35 @@ class JyMainViewModel(
     }
   }
 
+  fun validateActiveAdminSession(onExpired: () -> Unit) {
+    if (!_isAdminVerified.value) return
+    if (currentUserId != JyCatalogDefaults.SINGLE_ADMIN_UID) {
+      _isAdminVerified.value = false
+      onExpired()
+      return
+    }
+    if (AdminAuthClient.isSessionExpiredDueToInactivity()) {
+      viewModelScope.launch {
+        AdminAuthClient.logout()
+        _isAdminVerified.value = false
+        _feedbackMessage.value = "Administrator session expired due to inactivity."
+        onExpired()
+      }
+      return
+    }
+    if (AdminAuthClient.isBackendConfigured() && AdminAuthClient.hasActiveSession()) {
+      viewModelScope.launch {
+        val valid = AdminAuthClient.refreshSession()
+        if (!valid) {
+          AdminAuthClient.logout()
+          _isAdminVerified.value = false
+          _feedbackMessage.value = "Administrator session ended. Please sign in again."
+          onExpired()
+        }
+      }
+    }
+  }
+
   fun clearFeedback() {
     _feedbackMessage.value = null
   }
@@ -256,8 +286,7 @@ class JyMainViewModel(
       val regDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
       val uid = targetUid ?: currentUserId
       val role =
-        if (targetUid == null && _isAdminVerified.value) "admin"
-        else if (targetUid == null && _isInstructorVerified.value) "instructor"
+        if (targetUid == null && _isInstructorVerified.value && !_isAdminVerified.value) "instructor"
         else "student"
       val initialApproval =
         if (_isAdminVerified.value) "approved" else "pending"

@@ -43,6 +43,9 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -89,6 +92,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
@@ -96,6 +101,9 @@ import com.example.R
 import com.example.data.model.InstitutionSettings
 import com.example.data.model.JyCatalogDefaults
 import com.example.data.model.Programme
+import com.example.data.remote.AdminAuthClient
+import com.example.data.remote.AdminAuthResult
+import com.example.data.remote.AdminRecoveryResult
 import com.example.data.remote.GoogleAuthHelper
 import com.example.ui.components.JyBusinessFooter
 import com.example.ui.components.OfficialContactCard
@@ -335,6 +343,26 @@ fun LoginScreen(
   var isLoading by remember { mutableStateOf(false) }
   var errorMsg by remember { mutableStateOf<String?>(null) }
 
+  // Exclusive Owner Administrator form state (never persisted)
+  var adminUsername by remember { mutableStateOf("") }
+  var adminPassword by remember { mutableStateOf("") }
+  var passwordVisible by remember { mutableStateOf(false) }
+  var showRecoveryDialog by remember { mutableStateOf(false) }
+  var recoveryMessage by remember { mutableStateOf<String?>(null) }
+
+  if (showRecoveryDialog) {
+    AdminOwnerRecoveryDialog(
+      initialUsername = adminUsername,
+      onDismiss = { showRecoveryDialog = false },
+      onRecovered = { msg ->
+        showRecoveryDialog = false
+        adminPassword = ""
+        errorMsg = null
+        recoveryMessage = msg
+      },
+    )
+  }
+
   Scaffold(
     topBar = {
       TopAppBar(
@@ -360,13 +388,17 @@ fun LoginScreen(
         OfficialJyLogoBadge(size = 104.dp, cornerRadius = 20.dp)
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-          if (selectedPortalTab == 1) "Administrator Sign In" else "Student Sign In",
+          if (selectedPortalTab == 1) "Administrator Login" else "Student Sign In",
           style = MaterialTheme.typography.headlineMedium,
           fontWeight = FontWeight.Bold,
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-          "Select your portal below and sign in securely via Google Identity Services.",
+          if (selectedPortalTab == 1) {
+            "Exclusive JY-COMPUTERS owner portal protected by server-verified credentials."
+          } else {
+            "Sign in with your Google account to access the Student Portal, courses, payments, and services."
+          },
           style = MaterialTheme.typography.bodyMedium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           textAlign = TextAlign.Center,
@@ -377,15 +409,24 @@ fun LoginScreen(
         TabRow(selectedTabIndex = selectedPortalTab) {
           Tab(
             selected = selectedPortalTab == 0,
-            onClick = { selectedPortalTab = 0 },
+            onClick = {
+              selectedPortalTab = 0
+              errorMsg = null
+              recoveryMessage = null
+            },
             text = { Text("Student Login") },
             icon = { Icon(Icons.Filled.School, contentDescription = null) },
+            modifier = Modifier.testTag("tab_student_login"),
           )
           Tab(
             selected = selectedPortalTab == 1,
-            onClick = { selectedPortalTab = 1 },
+            onClick = {
+              selectedPortalTab = 1
+              errorMsg = null
+            },
             text = { Text("Administrator Login") },
             icon = { Icon(Icons.Filled.AdminPanelSettings, contentDescription = null) },
+            modifier = Modifier.testTag("tab_admin_login"),
           )
         }
 
@@ -397,7 +438,10 @@ fun LoginScreen(
           elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
           modifier = Modifier.fillMaxWidth(),
         ) {
-          Column(modifier = Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+          Column(
+            modifier = Modifier.padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+          ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
               Icon(
                 Icons.Filled.Security,
@@ -406,62 +450,182 @@ fun LoginScreen(
               )
               Spacer(modifier = Modifier.width(8.dp))
               Text(
-                if (selectedPortalTab == 1) "Restricted Admin Access" else "Student & Enrolment Access",
+                if (selectedPortalTab == 1) "Single-Administrator Access Control"
+                else "Student & Enrolment Access",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
               )
             }
             Spacer(modifier = Modifier.height(8.dp))
-            Text(
-              if (selectedPortalTab == 1) {
-                "Server-verified Role-Based Access Control ensures only authorized JY-Computers Administrators can open management controls."
-              } else {
-                "Sign in to access your Student Dashboard, course registration, OPay tuition details, or complete new student registration."
-              },
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              textAlign = TextAlign.Center,
-            )
-            Spacer(modifier = Modifier.height(20.dp))
 
-            Button(
-              onClick = {
-                errorMsg = null
-                isLoading = true
-                GoogleAuthHelper.onGoogleSignInClicked(
-                  context = context,
-                  credentialManager = credentialManager,
-                  scope = scope,
-                  onAuthSuccess = {
-                    isLoading = false
-                    onAuthSuccess()
-                  },
-                  onAuthError = { msg ->
-                    isLoading = false
-                    errorMsg = msg
-                  },
-                  onAuthCancelled = {
-                    isLoading = false
-                    errorMsg = "Sign-in was cancelled. Please select a Google account to continue."
-                  },
-                )
-              },
-              enabled = !isLoading,
-              modifier = Modifier.fillMaxWidth().height(54.dp).testTag("google_sign_in_button"),
-              shape = RoundedCornerShape(14.dp),
-            ) {
-              if (isLoading) {
-                CircularProgressIndicator(
-                  modifier = Modifier.size(22.dp),
-                  color = MaterialTheme.colorScheme.onPrimary,
-                  strokeWidth = 2.dp,
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text("Signing in...")
-              } else {
+            if (selectedPortalTab == 0) {
+              Text(
+                "Sign in to access your Student Dashboard, course registration, OPay tuition details, or complete new student registration. Student Google accounts never grant administrator privileges.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+              )
+              Spacer(modifier = Modifier.height(20.dp))
+
+              Button(
+                onClick = {
+                  errorMsg = null
+                  isLoading = true
+                  GoogleAuthHelper.onGoogleSignInClicked(
+                    context = context,
+                    credentialManager = credentialManager,
+                    scope = scope,
+                    onAuthSuccess = {
+                      isLoading = false
+                      onAuthSuccess()
+                    },
+                    onAuthError = { msg ->
+                      isLoading = false
+                      errorMsg = msg
+                    },
+                    onAuthCancelled = {
+                      isLoading = false
+                      errorMsg = "Sign-in was cancelled. Please select a Google account to continue."
+                    },
+                  )
+                },
+                enabled = !isLoading,
+                modifier = Modifier.fillMaxWidth().height(54.dp).testTag("google_sign_in_button"),
+                shape = RoundedCornerShape(14.dp),
+              ) {
+                if (isLoading) {
+                  CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    strokeWidth = 2.dp,
+                  )
+                  Spacer(modifier = Modifier.width(10.dp))
+                  Text("Signing in...")
+                } else {
+                  Text("Student Sign In with Google", style = MaterialTheme.typography.labelLarge)
+                }
+              }
+            } else {
+              Text(
+                "Google Sign-In is disabled for administrators. Enter the exclusive owner username and password.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+              )
+              Spacer(modifier = Modifier.height(16.dp))
+
+              OutlinedTextField(
+                value = adminUsername,
+                onValueChange = {
+                  adminUsername = it
+                  errorMsg = null
+                },
+                label = { Text("Username") },
+                singleLine = true,
+                enabled = !isLoading,
+                modifier = Modifier.fillMaxWidth().testTag("admin_username_input"),
+              )
+
+              Spacer(modifier = Modifier.height(12.dp))
+
+              OutlinedTextField(
+                value = adminPassword,
+                onValueChange = {
+                  adminPassword = it
+                  errorMsg = null
+                },
+                label = { Text("Password") },
+                singleLine = true,
+                enabled = !isLoading,
+                visualTransformation =
+                  if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                  IconButton(
+                    onClick = { passwordVisible = !passwordVisible },
+                    modifier = Modifier.testTag("admin_toggle_password_visibility"),
+                  ) {
+                    Icon(
+                      imageVector =
+                        if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                      contentDescription = if (passwordVisible) "Hide password" else "Show password",
+                    )
+                  }
+                },
+                modifier = Modifier.fillMaxWidth().testTag("admin_password_input"),
+              )
+
+              Spacer(modifier = Modifier.height(18.dp))
+
+              Button(
+                onClick = {
+                  errorMsg = null
+                  recoveryMessage = null
+                  if (adminUsername.isBlank() || adminPassword.isBlank()) {
+                    errorMsg = "Enter both administrator username and password."
+                    return@Button
+                  }
+                  isLoading = true
+                  scope.launch {
+                    when (val result = AdminAuthClient.login(adminUsername, adminPassword)) {
+                      is AdminAuthResult.Success -> {
+                        adminPassword = ""
+                        isLoading = false
+                        onAuthSuccess()
+                      }
+                      is AdminAuthResult.LockedOut -> {
+                        isLoading = false
+                        errorMsg = result.message
+                      }
+                      is AdminAuthResult.Failed -> {
+                        isLoading = false
+                        errorMsg = result.message
+                      }
+                    }
+                  }
+                },
+                enabled = !isLoading,
+                modifier =
+                  Modifier.fillMaxWidth().height(54.dp).testTag("admin_login_submit_button"),
+                shape = RoundedCornerShape(14.dp),
+              ) {
+                if (isLoading) {
+                  CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    strokeWidth = 2.dp,
+                  )
+                  Spacer(modifier = Modifier.width(10.dp))
+                  Text("Verifying Credentials...")
+                } else {
+                  Icon(Icons.Filled.AdminPanelSettings, contentDescription = null)
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Text("Secure Administrator Login", style = MaterialTheme.typography.labelLarge)
+                }
+              }
+
+              Spacer(modifier = Modifier.height(8.dp))
+
+              TextButton(
+                onClick = { showRecoveryDialog = true },
+                enabled = !isLoading,
+                modifier = Modifier.testTag("admin_forgot_password_button"),
+              ) {
+                Text("Forgot Password / Account Recovery")
+              }
+            }
+
+            if (recoveryMessage != null) {
+              Spacer(modifier = Modifier.height(12.dp))
+              Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+              ) {
                 Text(
-                  if (selectedPortalTab == 1) "Administrator Sign In with Google" else "Student Sign In with Google",
-                  style = MaterialTheme.typography.labelLarge,
+                  text = recoveryMessage!!,
+                  color = MaterialTheme.colorScheme.onPrimaryContainer,
+                  style = MaterialTheme.typography.bodySmall,
+                  modifier = Modifier.padding(12.dp),
                 )
               }
             }
@@ -471,7 +635,7 @@ fun LoginScreen(
               Surface(
                 color = MaterialTheme.colorScheme.errorContainer,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().testTag("admin_login_error_banner"),
               ) {
                 Text(
                   text = errorMsg!!,
@@ -494,6 +658,141 @@ fun LoginScreen(
       }
     }
   }
+}
+
+@Composable
+private fun AdminOwnerRecoveryDialog(
+  initialUsername: String,
+  onDismiss: () -> Unit,
+  onRecovered: (String) -> Unit,
+) {
+  val scope = rememberCoroutineScope()
+  var username by remember { mutableStateOf(initialUsername) }
+  var recoveryKey by remember { mutableStateOf("") }
+  var newPassword by remember { mutableStateOf("") }
+  var confirmPassword by remember { mutableStateOf("") }
+  var showSecrets by remember { mutableStateOf(false) }
+  var busy by remember { mutableStateOf(false) }
+  var localError by remember { mutableStateOf<String?>(null) }
+
+  AlertDialog(
+    onDismissRequest = { if (!busy) onDismiss() },
+    title = { Text("Owner Administrator Recovery") },
+    text = {
+      Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Text(
+          "No public email reset link is available for administrator accounts. Enter your administrator username, offline server recovery key, and a new strong password (minimum 12 characters with upper, lower, number, and symbol).",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+          value = username,
+          onValueChange = {
+            username = it
+            localError = null
+          },
+          label = { Text("Administrator Username") },
+          singleLine = true,
+          enabled = !busy,
+          modifier = Modifier.fillMaxWidth().testTag("admin_recovery_username_input"),
+        )
+        OutlinedTextField(
+          value = recoveryKey,
+          onValueChange = {
+            recoveryKey = it
+            localError = null
+          },
+          label = { Text("Owner Recovery Key") },
+          singleLine = true,
+          enabled = !busy,
+          visualTransformation =
+            if (showSecrets) VisualTransformation.None else PasswordVisualTransformation(),
+          trailingIcon = {
+            IconButton(onClick = { showSecrets = !showSecrets }) {
+              Icon(
+                if (showSecrets) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                contentDescription = if (showSecrets) "Hide recovery secret" else "Show recovery secret",
+              )
+            }
+          },
+          modifier = Modifier.fillMaxWidth().testTag("admin_recovery_key_input"),
+        )
+        OutlinedTextField(
+          value = newPassword,
+          onValueChange = {
+            newPassword = it
+            localError = null
+          },
+          label = { Text("New Strong Password") },
+          singleLine = true,
+          enabled = !busy,
+          visualTransformation =
+            if (showSecrets) VisualTransformation.None else PasswordVisualTransformation(),
+          modifier = Modifier.fillMaxWidth().testTag("admin_recovery_new_password_input"),
+        )
+        OutlinedTextField(
+          value = confirmPassword,
+          onValueChange = {
+            confirmPassword = it
+            localError = null
+          },
+          label = { Text("Confirm New Password") },
+          singleLine = true,
+          enabled = !busy,
+          visualTransformation =
+            if (showSecrets) VisualTransformation.None else PasswordVisualTransformation(),
+          modifier = Modifier.fillMaxWidth().testTag("admin_recovery_confirm_password_input"),
+        )
+        if (localError != null) {
+          Text(
+            text = localError!!,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
+          )
+        }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = {
+          when {
+            username.isBlank() || recoveryKey.isBlank() ->
+              localError = "Enter administrator username and recovery key."
+            newPassword.length < 12 ->
+              localError = "New password must be at least 12 characters."
+            newPassword != confirmPassword ->
+              localError = "New passwords do not match."
+            else -> {
+              localError = null
+              busy = true
+              scope.launch {
+                when (val res = AdminAuthClient.recoverPassword(username, recoveryKey, newPassword)) {
+                  is AdminRecoveryResult.Success -> {
+                    busy = false
+                    onRecovered(res.message)
+                  }
+                  is AdminRecoveryResult.Failed -> {
+                    busy = false
+                    localError = res.message
+                  }
+                }
+              }
+            }
+          }
+        },
+        enabled = !busy,
+        modifier = Modifier.testTag("admin_recovery_submit_button"),
+      ) {
+        Text(if (busy) "Resetting..." else "Reset Password")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }
+    },
+  )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -536,13 +835,13 @@ fun AccountRecoveryScreen(onBack: () -> Unit) {
         ) {
           Column(modifier = Modifier.padding(20.dp)) {
             Text(
-              "Google Sign-In Password Recovery",
+              "Student Google Account Recovery",
               style = MaterialTheme.typography.titleLarge,
               fontWeight = FontWeight.Bold,
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-              "JY-Computers uses Google Identity Services for zero-password security. If you forgot your password or cannot access your account, use Google's official recovery flow below.",
+              "Student accounts authenticate using Google Identity Services. If you cannot access your Google account, use Google's official recovery flow below.",
               style = MaterialTheme.typography.bodyMedium,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -566,6 +865,28 @@ fun AccountRecoveryScreen(onBack: () -> Unit) {
             ) {
               Text("Open Google Account Recovery")
             }
+          }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(
+          shape = RoundedCornerShape(20.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+              "Owner Administrator Recovery",
+              style = MaterialTheme.typography.titleMedium,
+              fontWeight = FontWeight.Bold,
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+              "Public email reset links are disabled for the single-administrator account. Return to Login → Administrator Login → Forgot Password / Account Recovery and provide the offline server-provisioned recovery key.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
           }
         }
 
