@@ -255,6 +255,34 @@ class CommunicationRepository(private val db: FirebaseFirestore) {
     }
   }
 
+  suspend fun ensureGeneralLoungeExists() {
+    val uid = auth.currentUser?.uid ?: return
+    val loungeRef = db.collection("chat_rooms").document("general_student_lounge")
+    try {
+      if (!loungeRef.get().await().exists()) {
+        loungeRef
+          .set(
+            mapOf(
+              "roomType" to "group",
+              "title" to "JY-Computers Student Lounge",
+              "programmeId" to "",
+              "memberUids" to listOf(uid),
+              "isGroupPublic" to true,
+              "typingUids" to emptyList<String>(),
+              "lastMessage" to "Welcome to JY-Computers Student Community!",
+              "lastSenderName" to "Administration",
+              "lastMessageAt" to FieldValue.serverTimestamp(),
+              "createdAt" to FieldValue.serverTimestamp(),
+              "updatedAt" to FieldValue.serverTimestamp(),
+            )
+          )
+          .await()
+      }
+    } catch (_: Exception) {
+      // Best-effort creation; may race with another user initializing concurrently
+    }
+  }
+
   fun observeRoomMessages(room: ChatRoom, currentUid: String): Flow<List<ChatMessage>> = flow {
     requireUserId()
     val coll = db.collection("chat_rooms").document(room.id).collection("messages")

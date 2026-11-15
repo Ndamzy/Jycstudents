@@ -191,6 +191,7 @@ fun AuthenticatedAppShell(
   val results by mainVm.results.collectAsStateWithLifecycle()
   val certificates by mainVm.certificates.collectAsStateWithLifecycle()
   val allUsersAdmin by mainVm.allUsersAdmin.collectAsStateWithLifecycle()
+  val instructorsAdmin by mainVm.instructorsAdmin.collectAsStateWithLifecycle()
   val activityLogsAdmin by mainVm.activityLogsAdmin.collectAsStateWithLifecycle()
   val learningMaterials by mainVm.learningMaterials.collectAsStateWithLifecycle()
   val actionBusy by mainVm.actionBusy.collectAsStateWithLifecycle()
@@ -782,6 +783,8 @@ fun AuthenticatedAppShell(
                       onAssignRole = { uid, fullName, email, role, spec, courseIds ->
                         mainVm.assignUserRoleAdmin(uid, fullName, email, role, spec, courseIds)
                       },
+                      currentUserId = mainVm.currentUserId,
+                      instructors = instructorsAdmin,
                     )
 
                   AppRoutes.INSTRUCTOR_DASHBOARD ->
@@ -807,6 +810,7 @@ fun AuthenticatedAppShell(
                         mainVm.addLearningMaterial(prog, title, desc, url)
                       },
                       onGoToRegister = { currentRoute = AppRoutes.COURSE_REGISTRATION },
+                      instructors = instructorsAdmin,
                     )
 
                   AppRoutes.SERVICES ->
@@ -915,6 +919,7 @@ fun AuthenticatedAppShell(
                       onMarkAttendance = { uid, name, sid, prog, dateKey, status ->
                         mainVm.markAttendance(uid, name, sid, prog, dateKey, status)
                       },
+                      currentUserId = mainVm.currentUserId,
                     )
 
                   AppRoutes.RESULTS ->

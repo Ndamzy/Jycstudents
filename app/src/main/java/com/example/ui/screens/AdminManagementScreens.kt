@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -40,6 +41,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -74,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import com.example.data.model.ActivityLog
 import com.example.data.model.Enrollment
 import com.example.data.model.InstitutionSettings
+import com.example.data.model.InstructorRole
 import com.example.data.model.JyCatalogDefaults
 import com.example.data.model.Programme
 import com.example.data.model.UserProfile
@@ -726,8 +729,12 @@ fun AdminRolesAndLogsScreen(
   programmes: List<Programme>,
   activityLogs: List<ActivityLog>,
   onAssignRole: (String, String, String, String, String, List<String>) -> Unit,
+  currentUserId: String = "",
+  instructors: List<InstructorRole> = emptyList(),
 ) {
   var searchQuery by remember { mutableStateOf("") }
+  var instructorDialogTarget by remember { mutableStateOf<UserProfile?>(null) }
+
   val filteredUsers =
     remember(allUsers, searchQuery) {
       allUsers.filter {
@@ -736,6 +743,32 @@ fun AdminRolesAndLogsScreen(
           it.email.contains(searchQuery, ignoreCase = true)
       }
     }
+
+  if (instructorDialogTarget != null) {
+    val target = instructorDialogTarget!!
+    val existingInst = instructors.firstOrNull { it.uid == target.userId }
+    val initialCourseIds =
+      existingInst?.assignedCourseIds?.toSet()
+        ?: programmes.filter { it.instructorUid == target.userId }.map { it.id }.toSet()
+    AssignInstructorDialog(
+      targetUser = target,
+      programmes = programmes,
+      initialSpecialization = existingInst?.specialization?.ifBlank { "Faculty Instructor" } ?: "Faculty Instructor",
+      initialCourseIds = initialCourseIds,
+      onDismiss = { instructorDialogTarget = null },
+      onConfirm = { spec, courseIds ->
+        onAssignRole(
+          target.userId,
+          target.fullName,
+          target.email,
+          "instructor",
+          spec,
+          courseIds,
+        )
+        instructorDialogTarget = null
+      },
+    )
+  }
 
   LazyColumn(
     modifier = Modifier.fillMaxSize().testTag("admin_roles_and_logs_screen"),
@@ -763,6 +796,9 @@ fun AdminRolesAndLogsScreen(
       }
     } else {
       items(filteredUsers, key = { "role_${it.userId}" }) { user ->
+        val instInfo = instructors.firstOrNull { it.uid == user.userId }
+        val assignedCount =
+          instInfo?.assignedCourseIds?.size ?: programmes.count { it.instructorUid == user.userId }
         Card(
           modifier = Modifier.fillMaxWidth(),
           shape = RoundedCornerShape(14.dp),
@@ -779,6 +815,13 @@ fun AdminRolesAndLogsScreen(
               Column(modifier = Modifier.weight(1f)) {
                 Text(user.fullName, fontWeight = FontWeight.SemiBold)
                 Text("${user.email} • ${user.role.uppercase()}", style = MaterialTheme.typography.bodySmall)
+                if (user.role == "instructor") {
+                  Text(
+                    "${instInfo?.specialization?.ifBlank { "Faculty Instructor" } ?: "Faculty Instructor"} • $assignedCount assigned course(s)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                  )
+                }
               }
               StatusPill(
                 user.role.uppercase(),
@@ -802,20 +845,24 @@ fun AdminRolesAndLogsScreen(
                   modifier = Modifier.weight(1f),
                 ) { Text("Grant Admin") }
               }
-              if (user.role != "instructor") {
+              OutlinedButton(
+                onClick = { instructorDialogTarget = user },
+                modifier = Modifier.weight(1f),
+              ) { Text(if (user.role == "instructor") "Edit Courses" else "Make Instructor") }
+              if (user.role != "student" && user.userId != currentUserId) {
                 OutlinedButton(
                   onClick = {
                     onAssignRole(
                       user.userId,
                       user.fullName,
                       user.email,
-                      "instructor",
-                      "Faculty Instructor",
-                      programmes.map { it.id },
+                      "student",
+                      "",
+                      emptyList(),
                     )
                   },
                   modifier = Modifier.weight(1f),
-                ) { Text("Make Instructor") }
+                ) { Text("Set Student") }
               }
             }
           }
@@ -859,4 +906,87 @@ fun AdminRolesAndLogsScreen(
       }
     }
   }
+}
+
+@Composable
+private fun AssignInstructorDialog(
+  targetUser: UserProfile,
+  programmes: List<Programme>,
+  initialSpecialization: String,
+  initialCourseIds: Set<String>,
+  onDismiss: () -> Unit,
+  onConfirm: (String, List<String>) -> Unit,
+) {
+  var specialization by remember { mutableStateOf(initialSpecialization) }
+  var selectedCourseIds by remember { mutableStateOf(initialCourseIds) }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("Assign Instructor: ${targetUser.fullName}") },
+    text = {
+      Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        OutlinedTextField(
+          value = specialization,
+          onValueChange = { specialization = it },
+          label = { Text("Specialization (e.g. Web & Mobile Dev)") },
+          singleLine = true,
+          modifier = Modifier.fillMaxWidth(),
+        )
+        if (programmes.isNotEmpty()) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text("Assigned Courses (${selectedCourseIds.size})", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+              TextButton(onClick = { selectedCourseIds = programmes.map { it.id }.toSet() }) {
+                Text("All")
+              }
+              TextButton(onClick = { selectedCourseIds = emptySet() }) {
+                Text("Clear")
+              }
+            }
+          }
+          programmes.forEach { prog ->
+            val checked = prog.id in selectedCourseIds
+            Row(
+              modifier =
+                Modifier.fillMaxWidth()
+                  .clickable {
+                    selectedCourseIds =
+                      if (checked) selectedCourseIds - prog.id else selectedCourseIds + prog.id
+                  }
+                  .padding(vertical = 4.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Checkbox(
+                checked = checked,
+                onCheckedChange = { isChecked ->
+                  selectedCourseIds =
+                    if (isChecked) selectedCourseIds + prog.id else selectedCourseIds - prog.id
+                },
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(prog.title, style = MaterialTheme.typography.bodyMedium)
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      TextButton(
+        onClick = {
+          onConfirm(
+            specialization.trim().ifBlank { "Faculty Instructor" },
+            selectedCourseIds.toList(),
+          )
+        }
+      ) { Text("Save Assignment") }
+    },
+    dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+  )
 }

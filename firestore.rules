@@ -453,7 +453,7 @@ service cloud.firestore {
 
     match /enrollments/{enrollmentId} {
       allow get: if isSignedIn() && isValidId(enrollmentId) && (
-        existing().userId == request.auth.uid || isAdmin() || isInstructor()
+        isAdmin() || isInstructor() || (resource != null && existing().userId == request.auth.uid)
       );
       allow list: if isSignedIn() && (
         existing().userId == request.auth.uid ||
@@ -472,7 +472,7 @@ service cloud.firestore {
 
     match /payments/{paymentId} {
       allow get: if isSignedIn() && isValidId(paymentId) && (
-        existing().userId == request.auth.uid || isAdmin()
+        isAdmin() || (resource != null && existing().userId == request.auth.uid)
       );
       allow list: if isSignedIn() && (
         existing().userId == request.auth.uid || isAdmin()
@@ -504,7 +504,7 @@ service cloud.firestore {
 
     match /service_requests/{requestId} {
       allow get: if isSignedIn() && isValidId(requestId) && (
-        existing().userId == request.auth.uid || isAdmin()
+        isAdmin() || (resource != null && existing().userId == request.auth.uid)
       );
       allow list: if isSignedIn() && (
         existing().userId == request.auth.uid || isAdmin()
@@ -524,7 +524,7 @@ service cloud.firestore {
 
     match /attendance/{attendanceId} {
       allow get: if isSignedIn() && isValidId(attendanceId) && (
-        existing().studentUid == request.auth.uid || isAdmin() || isInstructor()
+        isAdmin() || isInstructor() || (resource != null && existing().studentUid == request.auth.uid)
       );
       allow list: if isSignedIn() && (
         existing().studentUid == request.auth.uid ||
@@ -544,9 +544,9 @@ service cloud.firestore {
 
     match /results/{resultId} {
       allow get: if isSignedIn() && isValidId(resultId) && (
-        (existing().studentUid == request.auth.uid && existing().published == true) ||
         isAdmin() ||
-        isInstructor()
+        isInstructor() ||
+        (resource != null && existing().studentUid == request.auth.uid && existing().published == true)
       );
       allow list: if isSignedIn() && (
         (existing().studentUid == request.auth.uid && existing().published == true) ||
@@ -566,7 +566,7 @@ service cloud.firestore {
 
     match /certificates/{certificateId} {
       allow get: if isSignedIn() && isValidId(certificateId) && (
-        existing().studentUid == request.auth.uid || isAdmin()
+        isAdmin() || (resource != null && existing().studentUid == request.auth.uid)
       );
       allow list: if isSignedIn() && (
         existing().studentUid == request.auth.uid || isAdmin()
@@ -603,7 +603,7 @@ service cloud.firestore {
 
     match /notifications/{notificationId} {
       allow get: if isSignedIn() && isValidId(notificationId) && (
-        existing().userId == request.auth.uid || isAdmin()
+        isAdmin() || (resource != null && existing().userId == request.auth.uid)
       );
       allow list: if isSignedIn() && (
         existing().userId == request.auth.uid || isAdmin()
@@ -624,9 +624,10 @@ service cloud.firestore {
 
     match /chat_rooms/{roomId} {
       allow get: if isSignedIn() && isValidId(roomId) && (
+        isAdmin() ||
+        resource == null ||
         existing().isGroupPublic == true ||
-        request.auth.uid in existing().memberUids ||
-        isAdmin()
+        request.auth.uid in existing().memberUids
       );
       allow list: if isSignedIn() && (
         existing().isGroupPublic == true ||
@@ -646,9 +647,8 @@ service cloud.firestore {
 
       match /messages/{messageId} {
         allow get: if isSignedIn() && isValidId(roomId) && isValidId(messageId) && (
-          existing().isGroupPublic == true ||
-          request.auth.uid in existing().memberUids ||
-          isAdmin()
+          isAdmin() ||
+          (resource != null && (existing().isGroupPublic == true || request.auth.uid in existing().memberUids))
         );
         allow list: if isSignedIn() && (
           existing().isGroupPublic == true ||
@@ -679,7 +679,7 @@ service cloud.firestore {
 
     match /chat_reports/{reportId} {
       allow get: if isSignedIn() && isValidId(reportId) && (
-        existing().reporterUid == request.auth.uid || isAdmin()
+        isAdmin() || (resource != null && existing().reporterUid == request.auth.uid)
       );
       allow list: if isSignedIn() && (
         existing().reporterUid == request.auth.uid || isAdmin()

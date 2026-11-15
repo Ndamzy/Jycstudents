@@ -327,6 +327,158 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
     assertTrue("Expected PERMISSION_DENIED when unauthenticated user reads programmes", denied)
   }
 
+  @Test
+  fun adminAssignRoleAndChatLounge_syncsInstructorAccessAndPreventsDuplicateEnrollments() = runBlocking {
+    val profileRepo = ProfileAndSettingsRepository(firestore)
+    val academicRepo = CourseAndAcademicRepository(firestore)
+    val commRepo = CommunicationRepository(firestore)
+
+    val stuEmail = "stu_sync_${UUID.randomUUID()}@test.com"
+    val stuUid = signInTestUser(stuEmail)
+    val stuProfile =
+      UserProfile(
+        userId = stuUid,
+        role = "student",
+        studentIdNumber = "JYC-2026-7721",
+        fullName = "Tunde Learner",
+        gender = "Male",
+        dateOfBirth = "2002-01-10",
+        phoneNumber = "08123456789",
+        email = stuEmail,
+        residentialAddress = "Abuja",
+        stateOfOrigin = "FCT Abuja",
+        localGovernmentArea = "AMAC",
+        nextOfKin = "Bola",
+        nextOfKinPhone = "08011112222",
+        selectedProgrammeId = "web_dev_sync",
+        selectedProgrammeTitle = "Web Dev Sync",
+        trainingLevel = "Beginner",
+        registrationDate = "2026-11-14",
+        approvalStatus = "pending",
+        status = "active",
+      )
+    val stuReg = withTimeout(DEFAULT_TIMEOUT_MS) { profileRepo.registerOrCreateUserProfile(stuProfile) }
+    assertTrue("Student reg failed: ${stuReg.exceptionOrNull()}", stuReg.isSuccess)
+
+    val instEmail = "inst_sync_${UUID.randomUUID()}@test.com"
+    val instUid = signInTestUser(instEmail)
+    val instProfile =
+      stuProfile.copy(
+        userId = instUid,
+        studentIdNumber = "JYC-2026-7722",
+        fullName = "Engr. Musa",
+        email = instEmail,
+      )
+    val instReg = withTimeout(DEFAULT_TIMEOUT_MS) { profileRepo.registerOrCreateUserProfile(instProfile) }
+    assertTrue("Instructor candidate reg failed: ${instReg.exceptionOrNull()}", instReg.isSuccess)
+
+    // Admin creates a programme (initially unassigned) and enrolls the student
+    signInVerifiedAdminUser()
+    val progId = "prog_sync_${UUID.randomUUID().toString().take(6)}"
+    val prog =
+      Programme(
+        id = progId,
+        title = "Python & AI Engineering",
+        duration = "4 Months",
+        feeNaira = 180_000L,
+        category = "Software",
+        level = "Intermediate",
+        instructorUid = "",
+        instructorName = "JY-Computers Faculty",
+        active = true,
+      )
+    assertTrue(withTimeout(DEFAULT_TIMEOUT_MS) { academicRepo.saveProgramme(prog) }.isSuccess)
+
+    val firstEnr =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        academicRepo.registerCourseEnrollment(
+          studentUid = stuUid,
+          studentName = "Tunde Learner",
+          studentIdNumber = "JYC-2026-7721",
+          programme = prog,
+          session = "2026/2027 Session",
+        )
+      }
+    assertTrue("First enrollment should succeed", firstEnr.isSuccess)
+
+    val dupEnr =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        academicRepo.registerCourseEnrollment(
+          studentUid = stuUid,
+          studentName = "Tunde Learner",
+          studentIdNumber = "JYC-2026-7721",
+          programme = prog,
+          session = "2026/2027 Session",
+        )
+      }
+    assertTrue("Duplicate active enrollment must be rejected", dupEnr.isFailure)
+
+    // Admin promotes instUid to instructor assigned to progId
+    val assignRes =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        profileRepo.adminAssignRole(
+          targetUid = instUid,
+          fullName = "Engr. Musa",
+          email = instEmail,
+          role = "instructor",
+          specialization = "Software Engineering",
+          assignedCourseIds = listOf(progId),
+          actorName = "Dr. Joshua Dangana",
+        )
+      }
+    assertTrue("adminAssignRole failed: ${assignRes.exceptionOrNull()}", assignRes.isSuccess)
+
+    // Sign back in as instructor and confirm enrollment is readable & attendance can be recorded
+    signInTestUser(instEmail)
+    val instEnrollments =
+      withTimeout(FLOW_TIMEOUT_MS) {
+        academicRepo.observeEnrollments("instructor", instUid).first { list -> list.any { it.programmeId == progId } }
+      }
+    assertTrue(instEnrollments.any { it.userId == stuUid && it.instructorUid == instUid })
+
+    val attRes =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        academicRepo.recordAttendance(
+          studentUid = stuUid,
+          studentName = "Tunde Learner",
+          studentIdNumber = "JYC-2026-7721",
+          programme = prog.copy(instructorUid = instUid),
+          dateKey = "2026-11-14",
+          status = "present",
+        )
+      }
+    assertTrue("Instructor recordAttendance failed: ${attRes.exceptionOrNull()}", attRes.isSuccess)
+
+    // Verify general student lounge and 1-to-1 direct chat work for non-admin students
+    signInTestUser(stuEmail)
+    withTimeout(DEFAULT_TIMEOUT_MS) { commRepo.ensureGeneralLoungeExists() }
+    val loungeDoc =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        firestore.collection("chat_rooms").document("general_student_lounge").get().await()
+      }
+    assertTrue("general_student_lounge should exist", loungeDoc.exists())
+
+    val dmRes =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        commRepo.getOrCreateDirectRoom(
+          currentUid = stuUid,
+          currentName = "Tunde Learner",
+          peerUid = instUid,
+          peerName = "Engr. Musa",
+        )
+      }
+    assertTrue("getOrCreateDirectRoom failed: ${dmRes.exceptionOrNull()}", dmRes.isSuccess)
+    val sendDmRes =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        commRepo.sendMessage(
+          room = dmRes.getOrThrow(),
+          senderName = "Tunde Learner",
+          text = "Hello Instructor, ready for class!",
+        )
+      }
+    assertTrue("DM sendMessage failed: ${sendDmRes.exceptionOrNull()}", sendDmRes.isSuccess)
+  }
+
   private companion object {
     const val DEFAULT_TIMEOUT_MS = 5000L
     const val FLOW_TIMEOUT_MS = 4000L

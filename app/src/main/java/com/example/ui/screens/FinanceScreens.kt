@@ -160,23 +160,27 @@ fun PaymentScreen(
     )
   }
 
-  var selectedEnrollment by remember(enrollments) {
-    mutableStateOf(
-      enrollments.firstOrNull { it.id == preselectedEnrollmentId } ?: enrollments.firstOrNull()
-    )
+  var selectedEnrollmentId by remember {
+    mutableStateOf(preselectedEnrollmentId ?: enrollments.firstOrNull()?.id)
   }
-  var selectedRequest by remember(serviceRequests) {
-    mutableStateOf(
-      serviceRequests.firstOrNull { it.id == preselectedServiceRequestId } ?: serviceRequests.firstOrNull()
-    )
+  var selectedRequestId by remember {
+    mutableStateOf(preselectedServiceRequestId ?: serviceRequests.firstOrNull()?.id)
   }
+  val selectedEnrollment =
+    remember(enrollments, selectedEnrollmentId) {
+      enrollments.firstOrNull { it.id == selectedEnrollmentId } ?: enrollments.firstOrNull()
+    }
+  val selectedRequest =
+    remember(serviceRequests, selectedRequestId) {
+      serviceRequests.firstOrNull { it.id == selectedRequestId } ?: serviceRequests.firstOrNull()
+    }
 
   LaunchedEffect(preselectedEnrollmentId, preselectedServiceRequestId, enrollments, serviceRequests) {
     if (preselectedServiceRequestId != null) {
       val match = serviceRequests.firstOrNull { it.id == preselectedServiceRequestId }
       if (match != null) {
         targetMode = "service"
-        selectedRequest = match
+        selectedRequestId = match.id
         if (selectedTab >= 3) selectedTab = 0
         onClearPreselection()
       }
@@ -184,7 +188,7 @@ fun PaymentScreen(
       val match = enrollments.firstOrNull { it.id == preselectedEnrollmentId }
       if (match != null) {
         targetMode = "course"
-        selectedEnrollment = match
+        selectedEnrollmentId = match.id
         if (selectedTab >= 3) selectedTab = 0
         onClearPreselection()
       }
@@ -215,7 +219,7 @@ fun PaymentScreen(
     else selectedEnrollment?.outstandingNaira ?: 0L
   val defaultPayable = activeOutstanding.takeIf { it > 0L } ?: activeTotalFee
 
-  var amountInput by remember(targetMode, selectedEnrollment, selectedRequest) {
+  var amountInput by remember(targetMode, selectedEnrollment?.id, selectedRequest?.id) {
     mutableStateOf(defaultPayable.takeIf { it > 0L }?.toString() ?: "")
   }
   val todayStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
@@ -613,7 +617,7 @@ fun PaymentScreen(
               selected = targetMode == "course",
               onClick = {
                 targetMode = "course"
-                if (selectedEnrollment == null) selectedEnrollment = enrollments.firstOrNull()
+                if (selectedEnrollmentId == null) selectedEnrollmentId = enrollments.firstOrNull()?.id
               },
               enabled = enrollments.isNotEmpty(),
               label = { Text("Training Courses (${enrollments.size})") },
@@ -623,7 +627,7 @@ fun PaymentScreen(
               selected = targetMode == "service",
               onClick = {
                 targetMode = "service"
-                if (selectedRequest == null) selectedRequest = serviceRequests.firstOrNull()
+                if (selectedRequestId == null) selectedRequestId = serviceRequests.firstOrNull()?.id
               },
               enabled = serviceRequests.isNotEmpty(),
               label = { Text("Services (${serviceRequests.size})") },
@@ -666,7 +670,7 @@ fun PaymentScreen(
                       Text("${req.serviceTitle} (${req.invoiceNumber}) — Bal ${JyCatalogDefaults.formatNaira(req.outstandingNaira)}")
                     },
                     onClick = {
-                      selectedRequest = req
+                      selectedRequestId = req.id
                       amountInput = (req.outstandingNaira.takeIf { it > 0 } ?: req.totalFeeNaira).toString()
                       targetDropdownExpanded = false
                     },
@@ -679,7 +683,7 @@ fun PaymentScreen(
                       Text("${enr.programmeTitle} — Bal ${JyCatalogDefaults.formatNaira(enr.outstandingNaira)}")
                     },
                     onClick = {
-                      selectedEnrollment = enr
+                      selectedEnrollmentId = enr.id
                       amountInput = (enr.outstandingNaira.takeIf { it > 0 } ?: enr.totalFeeNaira).toString()
                       targetDropdownExpanded = false
                     },
@@ -1116,8 +1120,16 @@ private fun AdminRecordPaymentDialog(
   onRecord: (Enrollment?, ServiceRequest?, Long, String, String, String, String) -> Unit,
 ) {
   var targetMode by remember { mutableStateOf(if (enrollments.isNotEmpty()) "course" else "service") }
-  var selectedEnr by remember { mutableStateOf(enrollments.firstOrNull()) }
-  var selectedReq by remember { mutableStateOf(serviceRequests.firstOrNull()) }
+  var selectedEnrId by remember { mutableStateOf(enrollments.firstOrNull()?.id) }
+  var selectedReqId by remember { mutableStateOf(serviceRequests.firstOrNull()?.id) }
+  val selectedEnr =
+    remember(enrollments, selectedEnrId) {
+      enrollments.firstOrNull { it.id == selectedEnrId } ?: enrollments.firstOrNull()
+    }
+  val selectedReq =
+    remember(serviceRequests, selectedReqId) {
+      serviceRequests.firstOrNull { it.id == selectedReqId } ?: serviceRequests.firstOrNull()
+    }
   var targetExpanded by remember { mutableStateOf(false) }
 
   val initialAmount =
@@ -1127,7 +1139,7 @@ private fun AdminRecordPaymentDialog(
       (selectedEnr?.outstandingNaira?.takeIf { it > 0 } ?: selectedEnr?.totalFeeNaira ?: 0L).toString()
     }
 
-  var amountStr by remember(targetMode, selectedEnr, selectedReq) { mutableStateOf(initialAmount) }
+  var amountStr by remember(targetMode, selectedEnr?.id, selectedReq?.id) { mutableStateOf(initialAmount) }
   var method by remember { mutableStateOf("cash") }
   var ref by remember { mutableStateOf("JYC-OFF-${System.currentTimeMillis() % 100000}") }
   var date by remember { mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())) }
@@ -1175,7 +1187,7 @@ private fun AdminRecordPaymentDialog(
                 DropdownMenuItem(
                   text = { Text("${req.customerName} • ${req.serviceTitle} • Bal ${JyCatalogDefaults.formatNaira(req.outstandingNaira)}") },
                   onClick = {
-                    selectedReq = req
+                    selectedReqId = req.id
                     targetExpanded = false
                   },
                 )
@@ -1185,7 +1197,7 @@ private fun AdminRecordPaymentDialog(
                 DropdownMenuItem(
                   text = { Text("${enr.studentName} (${enr.studentIdNumber}) • Bal ${JyCatalogDefaults.formatNaira(enr.outstandingNaira)}") },
                   onClick = {
-                    selectedEnr = enr
+                    selectedEnrId = enr.id
                     targetExpanded = false
                   },
                 )

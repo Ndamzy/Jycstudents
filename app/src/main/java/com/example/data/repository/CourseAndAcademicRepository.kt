@@ -95,6 +95,8 @@ class CourseAndAcademicRepository(private val db: FirebaseFirestore) {
           )
           .await()
       } else {
+        val previousSnap = docRef.get().await()
+        val prevInstructorUid = previousSnap.getString("instructorUid").orEmpty()
         docRef
           .update(
             mapOf(
@@ -112,6 +114,9 @@ class CourseAndAcademicRepository(private val db: FirebaseFirestore) {
             )
           )
           .await()
+        if (prevInstructorUid != programme.instructorUid) {
+          syncProgrammeInstructorAcrossAcademicCollections(docRef.id, programme.instructorUid)
+        }
       }
       Result.success(docRef.id)
     } catch (e: CancellationException) {
@@ -119,6 +124,34 @@ class CourseAndAcademicRepository(private val db: FirebaseFirestore) {
     } catch (e: Exception) {
       handleFirestoreError(e, OperationType.WRITE, docRef.path)
       Result.failure(e)
+    }
+  }
+
+  private suspend fun syncProgrammeInstructorAcrossAcademicCollections(
+    programmeId: String,
+    instructorUid: String,
+  ) {
+    val refsToUpdate = mutableListOf<com.google.firebase.firestore.DocumentReference>()
+    listOf("enrollments", "attendance", "results").forEach { coll ->
+      val snap = db.collection(coll).whereEqualTo("programmeId", programmeId).get().await()
+      snap.documents.forEach { doc ->
+        if (doc.getString("instructorUid").orEmpty() != instructorUid) {
+          refsToUpdate.add(doc.reference)
+        }
+      }
+    }
+    refsToUpdate.chunked(400).forEach { chunk ->
+      val batch = db.batch()
+      chunk.forEach { ref ->
+        batch.update(
+          ref,
+          mapOf(
+            "instructorUid" to instructorUid,
+            "updatedAt" to FieldValue.serverTimestamp(),
+          ),
+        )
+      }
+      batch.commit().await()
     }
   }
 
@@ -191,6 +224,17 @@ class CourseAndAcademicRepository(private val db: FirebaseFirestore) {
     requireUserId()
     val docRef = db.collection("enrollments").document()
     return try {
+      val existingSnap =
+        db.collection("enrollments")
+          .whereEqualTo("userId", studentUid)
+          .whereEqualTo("programmeId", programme.id)
+          .get()
+          .await()
+      if (existingSnap.documents.any { it.getString("status") != "dropped" }) {
+        return Result.failure(
+          IllegalStateException("Already enrolled in ${programme.title}.")
+        )
+      }
       docRef
         .set(
           mapOf(

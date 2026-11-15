@@ -166,6 +166,11 @@ class JyMainViewModel(
       }
       if (admin) {
         profileRepo.seedInitialInstitutionIfNeeded()
+        profileRepo.ensureAdminDirectoryEntry(
+          uid = currentUserId,
+          fullName = currentUserDisplayName,
+          email = currentUserEmail,
+        )
       }
       profileRepo.updateOnlinePresence(true)
     }

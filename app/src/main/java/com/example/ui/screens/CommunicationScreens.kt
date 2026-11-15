@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -49,6 +50,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -380,9 +382,29 @@ private fun ChatConversationView(
   var pendingImageBase64 by remember { mutableStateOf("") }
   var reportTarget by remember { mutableStateOf<ChatMessage?>(null) }
   var reportReason by remember { mutableStateOf("") }
+  val listState = rememberLazyListState()
+
+  val visibleMessages = remember(messages, blockedUids) {
+    messages.filter { !it.deleted && it.senderUid !in blockedUids }
+  }
+  val typingOthers = remember(room.typingUids, currentUserId) {
+    room.typingUids.filter { it != currentUserId }
+  }
+
+  DisposableEffect(room.id) {
+    onDispose {
+      onTypingChanged(false)
+    }
+  }
 
   LaunchedEffect(messages.size) {
     onMarkMessagesRead()
+  }
+
+  LaunchedEffect(visibleMessages.size) {
+    if (visibleMessages.isNotEmpty()) {
+      listState.animateScrollToItem(visibleMessages.size - 1)
+    }
   }
 
   val imagePicker =
@@ -429,13 +451,6 @@ private fun ChatConversationView(
     )
   }
 
-  val visibleMessages = remember(messages, blockedUids) {
-    messages.filter { !it.deleted && it.senderUid !in blockedUids }
-  }
-  val typingOthers = remember(room.typingUids, currentUserId) {
-    room.typingUids.filter { it != currentUserId }
-  }
-
   Column(modifier = Modifier.fillMaxSize()) {
     Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
       Row(
@@ -461,6 +476,7 @@ private fun ChatConversationView(
     }
 
     LazyColumn(
+      state = listState,
       modifier = Modifier.weight(1f).fillMaxWidth(),
       contentPadding = PaddingValues(14.dp),
       verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -488,8 +504,8 @@ private fun ChatConversationView(
               if (!isMine) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                   Text(msg.senderName, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                  IconButton(onClick = { reportTarget = msg }, modifier = Modifier.size(20.dp)) {
-                    Icon(Icons.Filled.Flag, contentDescription = "Report message", modifier = Modifier.size(14.dp))
+                  IconButton(onClick = { reportTarget = msg }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Filled.Flag, contentDescription = "Report message", modifier = Modifier.size(16.dp))
                   }
                 }
               }

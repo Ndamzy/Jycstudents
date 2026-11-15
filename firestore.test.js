@@ -471,3 +471,30 @@ test("Universal Service Payment & Payment References: serviceRequestId allowed, 
   await assertFails(aliceDb.collection("payment_references").get());
 });
 
+test("Chat rooms: non-admin can check existence of general lounge and DM rooms without Null value error", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+
+  // Checking non-existent lounge & DM doc must succeed (not throw Null value error)
+  await assertSucceeds(aliceDb.collection("chat_rooms").doc("general_student_lounge").get());
+  const dmId = `dm_${ALICE_UID}_${BOB_UID}`;
+  await assertSucceeds(aliceDb.collection("chat_rooms").doc(dmId).get());
+
+  // Creating general lounge & sending message succeeds
+  await assertSucceeds(aliceDb.collection("chat_rooms").doc("general_student_lounge").set({
+    roomType: "group",
+    title: "JY-Computers Student Lounge",
+    programmeId: "",
+    memberUids: [ALICE_UID],
+    isGroupPublic: true,
+    typingUids: [],
+    lastMessage: "Welcome",
+    lastSenderName: "Administration",
+    lastMessageAt: serverTimestamp(),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(bobDb.collection("chat_rooms").doc("general_student_lounge").get());
+});
+
+

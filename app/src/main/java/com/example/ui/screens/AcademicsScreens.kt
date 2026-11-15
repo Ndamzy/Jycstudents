@@ -85,9 +85,21 @@ fun AttendanceScreen(
   enrollments: List<Enrollment>,
   attendance: List<AttendanceRecord>,
   onMarkAttendance: (String, String, String, Programme, String, String) -> Unit,
+  currentUserId: String = "",
 ) {
   val isStaff = activeRole == "admin" || activeRole == "instructor"
-  var selectedProgramme by remember(programmes) { mutableStateOf(programmes.firstOrNull()) }
+  val staffProgrammes =
+    remember(programmes, enrollments, activeRole, currentUserId) {
+      if (activeRole == "instructor") {
+        val enrolledProgIds = enrollments.map { it.programmeId }.toSet()
+        programmes
+          .filter { it.instructorUid == currentUserId || it.id in enrolledProgIds }
+          .ifEmpty { programmes }
+      } else {
+        programmes
+      }
+    }
+  var selectedProgramme by remember(staffProgrammes) { mutableStateOf(staffProgrammes.firstOrNull()) }
   var progExpanded by remember { mutableStateOf(false) }
   var dateKey by remember {
     mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()))
@@ -119,7 +131,7 @@ fun AttendanceScreen(
       }
     }
 
-    if (isStaff && programmes.isNotEmpty()) {
+    if (isStaff && staffProgrammes.isNotEmpty()) {
       item {
         Card(
           modifier = Modifier.fillMaxWidth(),
@@ -140,7 +152,7 @@ fun AttendanceScreen(
                 modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
               )
               ExposedDropdownMenu(expanded = progExpanded, onDismissRequest = { progExpanded = false }) {
-                programmes.forEach { prog ->
+                staffProgrammes.forEach { prog ->
                   DropdownMenuItem(
                     text = { Text(prog.title) },
                     onClick = {
@@ -175,11 +187,13 @@ fun AttendanceScreen(
         }
       } else {
         items(courseEnrollments, key = { it.id }) { enr ->
-          val prog = selectedProgramme ?: programmes.first()
+          val prog = selectedProgramme ?: staffProgrammes.firstOrNull()
           val currentStatus =
-            attendance.firstOrNull {
-              it.studentUid == enr.userId && it.programmeId == prog.id && it.dateKey == dateKey
-            }?.status
+            if (prog != null) {
+              attendance.firstOrNull {
+                it.studentUid == enr.userId && it.programmeId == prog.id && it.dateKey == dateKey
+              }?.status
+            } else null
           Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -198,7 +212,9 @@ fun AttendanceScreen(
                   FilterChip(
                     selected = currentStatus == st,
                     onClick = {
-                      onMarkAttendance(enr.userId, enr.studentName, enr.studentIdNumber, prog, dateKey, st)
+                      if (prog != null) {
+                        onMarkAttendance(enr.userId, enr.studentName, enr.studentIdNumber, prog, dateKey, st)
+                      }
                     },
                     label = { Text(st.replaceFirstChar { it.uppercase() }) },
                   )
@@ -546,27 +562,35 @@ private fun ResultEntryDialog(
     title = { Text(if (initial == null) "Enter Academic Result" else "Edit Result") },
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (initial == null && enrollments.isNotEmpty()) {
-          ExposedDropdownMenuBox(expanded = enrExpanded, onExpandedChange = { enrExpanded = it }) {
-            OutlinedTextField(
-              value = selectedEnrollment?.let { "${it.studentName} (${it.programmeTitle})" } ?: "Select Student",
-              onValueChange = {},
-              readOnly = true,
-              label = { Text("Student & Course") },
-              trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = enrExpanded) },
-              modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
-            )
-            ExposedDropdownMenu(expanded = enrExpanded, onDismissRequest = { enrExpanded = false }) {
-              enrollments.forEach { enr ->
-                DropdownMenuItem(
-                  text = { Text("${enr.studentName} • ${enr.programmeTitle}") },
-                  onClick = {
-                    selectedEnrollment = enr
-                    enrExpanded = false
-                  },
-                )
+        if (initial == null) {
+          if (enrollments.isNotEmpty()) {
+            ExposedDropdownMenuBox(expanded = enrExpanded, onExpandedChange = { enrExpanded = it }) {
+              OutlinedTextField(
+                value = selectedEnrollment?.let { "${it.studentName} (${it.programmeTitle})" } ?: "Select Student",
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Student & Course") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = enrExpanded) },
+                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+              )
+              ExposedDropdownMenu(expanded = enrExpanded, onDismissRequest = { enrExpanded = false }) {
+                enrollments.forEach { enr ->
+                  DropdownMenuItem(
+                    text = { Text("${enr.studentName} • ${enr.programmeTitle}") },
+                    onClick = {
+                      selectedEnrollment = enr
+                      enrExpanded = false
+                    },
+                  )
+                }
               }
             }
+          } else {
+            Text(
+              "No enrolled students found for your assigned courses yet.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.error,
+            )
           }
         }
         OutlinedTextField(
@@ -607,7 +631,7 @@ private fun ResultEntryDialog(
           val name = initial?.studentName ?: enr?.studentName ?: return@TextButton
           val sid = initial?.studentIdNumber ?: enr?.studentIdNumber ?: return@TextButton
           val pid = initial?.programmeId ?: enr?.programmeId ?: return@TextButton
-          val prog = programmes.firstOrNull { it.id == pid } ?: programmes.first()
+          val prog = programmes.firstOrNull { it.id == pid } ?: programmes.firstOrNull() ?: return@TextButton
           onSave(initial?.id, uid, name, sid, prog, assignVal, examVal, remarks, published)
         },
       ) { Text("Save") }
@@ -655,6 +679,7 @@ private fun IssueCertificateDialog(
                 text = { Text("${st.fullName} (${st.studentIdNumber})") },
                 onClick = {
                   selectedStudent = st
+                  selectedProg = programmes.firstOrNull { it.id == st.selectedProgrammeId } ?: selectedProg
                   stExpanded = false
                 },
               )

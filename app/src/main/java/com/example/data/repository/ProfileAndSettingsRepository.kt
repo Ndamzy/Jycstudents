@@ -386,7 +386,23 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
           "updatedAt" to FieldValue.serverTimestamp(),
         )
       batch.update(userRef, userUpdates)
-      batch.update(dirRef, dirUpdates)
+      if (dirRef.get().await().exists()) {
+        batch.update(dirRef, dirUpdates)
+      } else if (profile.role == "student") {
+        batch.set(
+          dirRef,
+          mapOf(
+            "userId" to uid,
+            "fullName" to profile.fullName.trim(),
+            "studentIdNumber" to profile.studentIdNumber.ifBlank { "JYC-USER" },
+            "role" to profile.role,
+            "selectedProgrammeTitle" to profile.selectedProgrammeTitle,
+            "isOnline" to true,
+            "lastSeenAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp(),
+          ),
+        )
+      }
       batch.commit().await()
       Result.success(Unit)
     } catch (e: CancellationException) {
@@ -394,6 +410,35 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     } catch (e: Exception) {
       handleFirestoreError(e, OperationType.UPDATE, userRef.path)
       Result.failure(e)
+    }
+  }
+
+  suspend fun ensureAdminDirectoryEntry(
+    uid: String,
+    fullName: String,
+    email: String,
+  ) {
+    val dirRef = db.collection("directory").document(uid)
+    try {
+      if (!dirRef.get().await().exists()) {
+        val safeName = fullName.trim().ifBlank { email.substringBefore('@').ifBlank { "JY-Computers Admin" } }
+        dirRef
+          .set(
+            mapOf(
+              "userId" to uid,
+              "fullName" to safeName,
+              "studentIdNumber" to "ADMIN",
+              "role" to "admin",
+              "selectedProgrammeTitle" to "Administration",
+              "isOnline" to true,
+              "lastSeenAt" to FieldValue.serverTimestamp(),
+              "updatedAt" to FieldValue.serverTimestamp(),
+            )
+          )
+          .await()
+      }
+    } catch (_: Exception) {
+      // Best-effort directory registration for verified admin
     }
   }
 
@@ -650,39 +695,71 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
     val actorUid = requireUserId()
     val userRef = db.collection("users").document(targetUid)
     val dirRef = db.collection("directory").document(targetUid)
+    val instRef = db.collection("instructors").document(targetUid)
+    val adminRef = db.collection("admins").document(targetUid)
     return try {
       val batch = db.batch()
       batch.update(userRef, mapOf("role" to role, "updatedAt" to FieldValue.serverTimestamp()))
-      if (dirRef.get().await().exists()) {
+      val dirSnap = dirRef.get().await()
+      if (dirSnap.exists()) {
         batch.update(dirRef, mapOf("role" to role, "updatedAt" to FieldValue.serverTimestamp()))
+      } else {
+        val userSnap = userRef.get().await()
+        batch.set(
+          dirRef,
+          mapOf(
+            "userId" to targetUid,
+            "fullName" to fullName.trim().ifBlank { "JY User" },
+            "studentIdNumber" to (userSnap.getString("studentIdNumber") ?: "JYC-STAFF"),
+            "role" to role,
+            "selectedProgrammeTitle" to (userSnap.getString("selectedProgrammeTitle") ?: ""),
+            "isOnline" to false,
+            "lastSeenAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp(),
+          ),
+        )
       }
+
+      val cleanCourseIds = assignedCourseIds.distinct().take(20)
       if (role == "instructor") {
-        val instRef = db.collection("instructors").document(targetUid)
         batch.set(
           instRef,
           mapOf(
             "uid" to targetUid,
-            "fullName" to fullName,
-            "email" to email,
-            "specialization" to specialization,
-            "assignedCourseIds" to assignedCourseIds,
+            "fullName" to fullName.trim(),
+            "email" to email.trim(),
+            "specialization" to specialization.trim().ifBlank { "Computer Training" },
+            "assignedCourseIds" to cleanCourseIds,
             "active" to true,
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp(),
           ),
         )
+        if (adminRef.get().await().exists()) {
+          batch.delete(adminRef)
+        }
       } else if (role == "admin") {
-        val adminRef = db.collection("admins").document(targetUid)
         batch.set(
           adminRef,
           mapOf(
             "uid" to targetUid,
-            "email" to email,
-            "fullName" to fullName,
+            "email" to email.trim(),
+            "fullName" to fullName.trim(),
             "createdAt" to FieldValue.serverTimestamp(),
           ),
         )
+        if (instRef.get().await().exists()) {
+          batch.delete(instRef)
+        }
+      } else {
+        if (adminRef.get().await().exists()) {
+          batch.delete(adminRef)
+        }
+        if (instRef.get().await().exists()) {
+          batch.delete(instRef)
+        }
       }
+
       val logRef = db.collection("activity_logs").document()
       batch.set(
         logRef,
@@ -696,6 +773,72 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
         ),
       )
       batch.commit().await()
+
+      // Sync assigned courses and academic records so instructor queries & security rules align immediately
+      val effectiveAssignedIds = if (role == "instructor") cleanCourseIds.toSet() else emptySet()
+      val allProgrammes = db.collection("programmes").get().await()
+      val affectedProgrammeUpdates = mutableListOf<Pair<com.google.firebase.firestore.DocumentReference, Map<String, Any>>>()
+      val assignedCourseIdList = mutableListOf<String>()
+      val clearedCourseIdList = mutableListOf<String>()
+
+      allProgrammes.documents.forEach { progDoc ->
+        val currentlyAssignedUid = progDoc.getString("instructorUid").orEmpty()
+        if (progDoc.id in effectiveAssignedIds) {
+          assignedCourseIdList.add(progDoc.id)
+          if (currentlyAssignedUid != targetUid) {
+            affectedProgrammeUpdates.add(
+              progDoc.reference to mapOf(
+                "instructorUid" to targetUid,
+                "instructorName" to fullName.trim(),
+                "updatedAt" to FieldValue.serverTimestamp(),
+              )
+            )
+          }
+        } else if (currentlyAssignedUid == targetUid) {
+          clearedCourseIdList.add(progDoc.id)
+          affectedProgrammeUpdates.add(
+            progDoc.reference to mapOf(
+              "instructorUid" to "",
+              "instructorName" to "JY-Computers Faculty",
+              "updatedAt" to FieldValue.serverTimestamp(),
+            )
+          )
+        }
+      }
+
+      affectedProgrammeUpdates.chunked(400).forEach { chunk ->
+        val progBatch = db.batch()
+        chunk.forEach { (ref, map) -> progBatch.update(ref, map) }
+        progBatch.commit().await()
+      }
+
+      val academicDocUpdates = mutableListOf<Pair<com.google.firebase.firestore.DocumentReference, String>>()
+      listOf("enrollments", "attendance", "results").forEach { coll ->
+        assignedCourseIdList.forEach { progId ->
+          val snap = db.collection(coll).whereEqualTo("programmeId", progId).get().await()
+          snap.documents.forEach { doc ->
+            if (doc.getString("instructorUid").orEmpty() != targetUid) {
+              academicDocUpdates.add(doc.reference to targetUid)
+            }
+          }
+        }
+        clearedCourseIdList.forEach { progId ->
+          val snap = db.collection(coll).whereEqualTo("programmeId", progId).get().await()
+          snap.documents.forEach { doc ->
+            if (doc.getString("instructorUid").orEmpty() == targetUid) {
+              academicDocUpdates.add(doc.reference to "")
+            }
+          }
+        }
+      }
+      academicDocUpdates.chunked(400).forEach { chunk ->
+        val acadBatch = db.batch()
+        chunk.forEach { (ref, instUid) ->
+          acadBatch.update(ref, mapOf("instructorUid" to instUid, "updatedAt" to FieldValue.serverTimestamp()))
+        }
+        acadBatch.commit().await()
+      }
+
       Result.success(Unit)
     } catch (e: CancellationException) {
       throw e
@@ -882,24 +1025,28 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
             ),
           )
         }
-        val loungeRef = db.collection("chat_rooms").document("general_student_lounge")
-        batch.set(
-          loungeRef,
-          mapOf(
-            "roomType" to "group",
-            "title" to "JY-Computers Student Lounge",
-            "programmeId" to "",
-            "memberUids" to listOf(uid),
-            "isGroupPublic" to true,
-            "typingUids" to emptyList<String>(),
-            "lastMessage" to "Welcome to JY-Computers Student Community!",
-            "lastSenderName" to "Administration",
-            "lastMessageAt" to FieldValue.serverTimestamp(),
-            "createdAt" to FieldValue.serverTimestamp(),
-            "updatedAt" to FieldValue.serverTimestamp(),
-          ),
-        )
         batch.commit().await()
+      }
+
+      val loungeRef = db.collection("chat_rooms").document("general_student_lounge")
+      if (!loungeRef.get().await().exists()) {
+        loungeRef
+          .set(
+            mapOf(
+              "roomType" to "group",
+              "title" to "JY-Computers Student Lounge",
+              "programmeId" to "",
+              "memberUids" to listOf(uid),
+              "isGroupPublic" to true,
+              "typingUids" to emptyList<String>(),
+              "lastMessage" to "Welcome to JY-Computers Student Community!",
+              "lastSenderName" to "Administration",
+              "lastMessageAt" to FieldValue.serverTimestamp(),
+              "createdAt" to FieldValue.serverTimestamp(),
+              "updatedAt" to FieldValue.serverTimestamp(),
+            )
+          )
+          .await()
       }
 
       val servicesSnap = db.collection("services").limit(1).get().await()

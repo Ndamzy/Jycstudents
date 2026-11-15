@@ -66,6 +66,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.model.Enrollment
 import com.example.data.model.InstitutionSettings
+import com.example.data.model.InstructorRole
 import com.example.data.model.JyCatalogDefaults
 import com.example.data.model.LearningMaterial
 import com.example.data.model.Programme
@@ -95,6 +96,7 @@ fun CourseCatalogueScreen(
   onDeleteProgramme: (String) -> Unit,
   onAddLearningMaterial: (Programme, String, String, String) -> Unit,
   onGoToRegister: () -> Unit,
+  instructors: List<InstructorRole> = emptyList(),
 ) {
   var selectedTab by remember { mutableIntStateOf(0) }
   var selectedCategory by remember { mutableStateOf("All") }
@@ -132,6 +134,7 @@ fun CourseCatalogueScreen(
   if (editingProgramme != null) {
     ProgrammeEditorDialog(
       initial = editingProgramme!!,
+      instructors = instructors,
       onDismiss = { editingProgramme = null },
       onSave = { updated ->
         onSaveProgramme(updated)
@@ -387,8 +390,27 @@ fun CourseRegistrationScreen(
   val enrolledIds = remember(enrollments) { enrollments.map { it.programmeId }.toSet() }
   val students = remember(allUsers) { allUsers.filter { it.role == "student" || it.studentIdNumber.isNotBlank() } }
 
+  val effectiveProgrammes =
+    remember(programmes) {
+      programmes.ifEmpty {
+        JyCatalogDefaults.DEFAULT_PROGRAMMES.map {
+          Programme(
+            id = it.id,
+            title = it.title,
+            description = it.description,
+            duration = it.duration,
+            feeNaira = it.feeNaira,
+            category = it.category,
+            level = it.level,
+            scheduleText = it.scheduleText,
+            active = true,
+          )
+        }
+      }
+    }
+
   var selectedStudent by remember(students) { mutableStateOf(students.firstOrNull()) }
-  var selectedCourse by remember(programmes) { mutableStateOf(programmes.firstOrNull()) }
+  var selectedCourse by remember(effectiveProgrammes) { mutableStateOf(effectiveProgrammes.firstOrNull()) }
   var stuExpanded by remember { mutableStateOf(false) }
   var courseExpanded by remember { mutableStateOf(false) }
 
@@ -401,7 +423,7 @@ fun CourseRegistrationScreen(
       OfficialOpayBankCard(settings = settings, onCopied = onNotify)
     }
 
-    if (isAdmin && students.isNotEmpty() && programmes.isNotEmpty()) {
+    if (isAdmin && students.isNotEmpty() && effectiveProgrammes.isNotEmpty()) {
       item {
         Card(
           modifier = Modifier.fillMaxWidth(),
@@ -441,7 +463,7 @@ fun CourseRegistrationScreen(
                 modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
               )
               ExposedDropdownMenu(expanded = courseExpanded, onDismissRequest = { courseExpanded = false }) {
-                programmes.forEach { prog ->
+                effectiveProgrammes.forEach { prog ->
                   DropdownMenuItem(
                     text = { Text("${prog.title} • ${prog.duration} (${JyCatalogDefaults.formatNaira(prog.feeNaira)})") },
                     onClick = {
@@ -571,7 +593,7 @@ fun CourseRegistrationScreen(
         )
       }
 
-      items(programmes.filter { it.active }, key = { "reg_${it.id}" }) { prog ->
+      items(effectiveProgrammes.filter { it.active }, key = { "reg_${it.id}" }) { prog ->
         val alreadyEnrolled = prog.id in enrolledIds
         Card(
           modifier = Modifier.fillMaxWidth(),
@@ -613,6 +635,7 @@ fun CourseRegistrationScreen(
 @Composable
 private fun ProgrammeEditorDialog(
   initial: Programme,
+  instructors: List<InstructorRole> = emptyList(),
   onDismiss: () -> Unit,
   onSave: (Programme) -> Unit,
 ) {
@@ -623,7 +646,9 @@ private fun ProgrammeEditorDialog(
   var category by remember { mutableStateOf(initial.category.ifBlank { "Foundation" }) }
   var level by remember { mutableStateOf(initial.level.ifBlank { "All Levels" }) }
   var levelExpanded by remember { mutableStateOf(false) }
+  var instructorUid by remember { mutableStateOf(initial.instructorUid) }
   var instructorName by remember { mutableStateOf(initial.instructorName.ifBlank { "JY-Computers Faculty" }) }
+  var instExpanded by remember { mutableStateOf(false) }
   var scheduleText by remember { mutableStateOf(initial.scheduleText.ifBlank { "Mon - Wed • 10:00 AM" }) }
 
   AlertDialog(
@@ -659,7 +684,40 @@ private fun ProgrammeEditorDialog(
             }
           }
         }
-        OutlinedTextField(value = instructorName, onValueChange = { instructorName = it }, label = { Text("Instructor Name") }, singleLine = true)
+        if (instructors.isNotEmpty()) {
+          ExposedDropdownMenuBox(expanded = instExpanded, onExpandedChange = { instExpanded = it }) {
+            OutlinedTextField(
+              value = instructorName,
+              onValueChange = {},
+              readOnly = true,
+              label = { Text("Assigned Instructor") },
+              trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = instExpanded) },
+              modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+            )
+            ExposedDropdownMenu(expanded = instExpanded, onDismissRequest = { instExpanded = false }) {
+              DropdownMenuItem(
+                text = { Text("JY-Computers Faculty (Unassigned)") },
+                onClick = {
+                  instructorUid = ""
+                  instructorName = "JY-Computers Faculty"
+                  instExpanded = false
+                },
+              )
+              instructors.forEach { inst ->
+                DropdownMenuItem(
+                  text = { Text("${inst.fullName} (${inst.specialization.ifBlank { "Instructor" }})") },
+                  onClick = {
+                    instructorUid = inst.uid
+                    instructorName = inst.fullName
+                    instExpanded = false
+                  },
+                )
+              }
+            }
+          }
+        } else {
+          OutlinedTextField(value = instructorName, onValueChange = { instructorName = it }, label = { Text("Instructor Name") }, singleLine = true)
+        }
         OutlinedTextField(value = scheduleText, onValueChange = { scheduleText = it }, label = { Text("Class Schedule") }, singleLine = true)
         OutlinedTextField(value = description, onValueChange = { description = it }, label = { Text("Course Description") })
       }
@@ -677,6 +735,7 @@ private fun ProgrammeEditorDialog(
                 feeNaira = fee,
                 category = category,
                 level = level,
+                instructorUid = instructorUid,
                 instructorName = instructorName,
                 scheduleText = scheduleText,
               )

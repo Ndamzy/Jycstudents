@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -36,11 +37,17 @@ class JyChatViewModel(
   val isAdmin: Boolean,
 ) : ViewModel() {
 
-  private val _activeRoom = MutableStateFlow<ChatRoom?>(null)
-  val activeRoom: StateFlow<ChatRoom?> = _activeRoom.asStateFlow()
+  private val _activeRoomId = MutableStateFlow<String?>(null)
+  private val _fallbackActiveRoom = MutableStateFlow<ChatRoom?>(null)
 
   private val _chatFeedback = MutableStateFlow<String?>(null)
   val chatFeedback: StateFlow<String?> = _chatFeedback.asStateFlow()
+
+  init {
+    viewModelScope.launch {
+      commRepo.ensureGeneralLoungeExists()
+    }
+  }
 
   val announcements: StateFlow<List<Announcement>> =
     commRepo
@@ -84,8 +91,18 @@ class JyChatViewModel(
       }
       .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), emptyList())
 
+  val activeRoom: StateFlow<ChatRoom?> =
+    combine(_activeRoomId, _fallbackActiveRoom, allRooms) { roomId, fallback, rooms ->
+        if (roomId == null) null
+        else rooms.firstOrNull { it.id == roomId } ?: fallback
+      }
+      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), null)
+
   val activeMessages: StateFlow<List<ChatMessage>> =
-    _activeRoom
+    activeRoom
+      .distinctUntilChanged { old, new ->
+        old?.id == new?.id && old?.isGroupPublic == new?.isGroupPublic
+      }
       .flatMapLatest { room ->
         if (room == null) flowOf(emptyList())
         else commRepo.observeRoomMessages(room, currentUserId)
@@ -108,15 +125,17 @@ class JyChatViewModel(
   }
 
   fun openRoom(room: ChatRoom) {
-    _activeRoom.value = room
+    _fallbackActiveRoom.value = room
+    _activeRoomId.value = room.id
   }
 
   fun closeRoom() {
-    val prev = _activeRoom.value
-    if (prev != null) {
-      viewModelScope.launch { commRepo.setTypingStatus(prev.id, false) }
+    val prevId = _activeRoomId.value
+    if (prevId != null) {
+      viewModelScope.launch { commRepo.setTypingStatus(prevId, false) }
     }
-    _activeRoom.value = null
+    _activeRoomId.value = null
+    _fallbackActiveRoom.value = null
   }
 
   fun startDirectChat(peer: DirectoryEntry, senderDisplayName: String, onRoomReady: (ChatRoom) -> Unit) {
@@ -130,7 +149,8 @@ class JyChatViewModel(
         )
       if (res.isSuccess) {
         val room = res.getOrThrow()
-        _activeRoom.value = room
+        _fallbackActiveRoom.value = room
+        _activeRoomId.value = room.id
         onRoomReady(room)
       } else {
         _chatFeedback.value =
