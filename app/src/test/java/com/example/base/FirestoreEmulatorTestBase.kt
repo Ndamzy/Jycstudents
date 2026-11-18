@@ -2,10 +2,12 @@ package com.example.base
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.model.JyCatalogDefaults
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
+import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.FirebaseFirestoreSettings
@@ -77,6 +79,23 @@ abstract class FirestoreEmulatorTestBase {
     auth.signOut()
   }
 
+  protected suspend fun clearAuthEmulatorAccounts() =
+    withContext(Dispatchers.IO) {
+      auth.signOut()
+      val url =
+        java.net.URL(
+          "http://$EMULATOR_HOST:$AUTH_PORT/emulator/v1/projects/$PROJECT_ID/accounts"
+        )
+      val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+        requestMethod = "DELETE"
+        setRequestProperty("Authorization", "Bearer owner")
+      }
+      check(conn.responseCode in 200..299) {
+        "Clearing Auth emulator accounts failed: HTTP ${conn.responseCode}"
+      }
+      conn.disconnect()
+    }
+
   protected suspend fun signInTestUser(email: String): String =
     withContext(Dispatchers.IO) {
       withTimeout(AUTH_TIMEOUT_MS) {
@@ -117,56 +136,147 @@ abstract class FirestoreEmulatorTestBase {
     return "$headerB64.$payloadB64."
   }
 
-  protected suspend fun signInSingleOwnerAdmin(): String =
+  private fun createEmulatorGoogleIdToken(
+    subject: String,
+    email: String,
+    emailVerified: Boolean = true,
+    displayName: String = "Joshua Dangana",
+  ): String {
+    val nowSec = System.currentTimeMillis() / 1000L
+    val headerJson = JSONObject().put("alg", "none").put("typ", "JWT").toString()
+    val payloadJson =
+      JSONObject()
+        .put("iss", "https://accounts.google.com")
+        .put("sub", subject)
+        .put("aud", "emulator-client-id.apps.googleusercontent.com")
+        .put("iat", nowSec)
+        .put("exp", nowSec + 3600L)
+        .put("email", email)
+        .put("email_verified", emailVerified)
+        .put("name", displayName)
+        .toString()
+
+    val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+    val headerB64 = android.util.Base64.encodeToString(headerJson.toByteArray(Charsets.UTF_8), flags)
+    val payloadB64 = android.util.Base64.encodeToString(payloadJson.toByteArray(Charsets.UTF_8), flags)
+    return "$headerB64.$payloadB64."
+  }
+
+  private fun updateEmulatorAccountAttributes(
+    uid: String,
+    emailVerified: Boolean,
+    customAttributesJson: String?,
+  ) {
+    val url =
+      java.net.URL(
+        "http://$EMULATOR_HOST:$AUTH_PORT/identitytoolkit.googleapis.com/v1/projects/$PROJECT_ID/accounts:update"
+      )
+    val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+      requestMethod = "POST"
+      doOutput = true
+      setRequestProperty("Content-Type", "application/json")
+      setRequestProperty("Authorization", "Bearer owner")
+    }
+    val payload =
+      JSONObject().apply {
+        put("localId", uid)
+        put("emailVerified", emailVerified)
+        if (customAttributesJson != null) {
+          put("customAttributes", customAttributesJson)
+        }
+      }
+    conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+    check(conn.responseCode in 200..299) {
+      "Auth emulator account update failed: HTTP ${conn.responseCode}"
+    }
+    conn.disconnect()
+  }
+
+  private fun createEmulatorAccountWithFixedUid(
+    uid: String,
+    email: String,
+    emailVerified: Boolean,
+    displayName: String = "Joshua Dangana",
+  ) {
+    val url =
+      java.net.URL(
+        "http://$EMULATOR_HOST:$AUTH_PORT/identitytoolkit.googleapis.com/v1/projects/$PROJECT_ID/accounts"
+      )
+    val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+      requestMethod = "POST"
+      doOutput = true
+      setRequestProperty("Content-Type", "application/json")
+      setRequestProperty("Authorization", "Bearer owner")
+    }
+    val payload =
+      JSONObject()
+        .put("localId", uid)
+        .put("email", email)
+        .put("emailVerified", emailVerified)
+        .put("displayName", displayName)
+    conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+    val code = conn.responseCode
+    conn.disconnect()
+    check(code in 200..299 || code == 400) {
+      "Auth emulator account create failed: HTTP $code"
+    }
+  }
+
+  protected suspend fun signInGoogleUserInEmulator(
+    email: String,
+    subject: String = "google_sub_${email.lowercase()}",
+    emailVerified: Boolean = true,
+    customAttributesJson: String = "{}",
+    fixedUid: String? = null,
+  ): String =
     withContext(Dispatchers.IO) {
       withTimeout(AUTH_TIMEOUT_MS) {
-        val token =
-          createEmulatorCustomToken(
-            uid = com.example.data.model.JyCatalogDefaults.SINGLE_ADMIN_UID,
-            claims =
-              mapOf(
-                "jySingleAdmin" to true,
-                "role" to "admin",
-                "sessionVersion" to 1,
-              ),
+        if (!fixedUid.isNullOrBlank()) {
+          createEmulatorAccountWithFixedUid(
+            uid = fixedUid,
+            email = email,
+            emailVerified = emailVerified,
           )
-        val result = auth.signInWithCustomToken(token).await()
-        val user = checkNotNull(result.user) { "Single owner admin custom token auth failed" }
+        }
+        val fakeGoogleIdToken =
+          createEmulatorGoogleIdToken(
+            subject = subject,
+            email = email,
+            emailVerified = emailVerified,
+          )
+        val credential = GoogleAuthProvider.getCredential(fakeGoogleIdToken, null)
+        val initialResult = auth.signInWithCredential(credential).await()
+        val uid = checkNotNull(initialResult.user?.uid) { "Google Auth emulator sign-in failed" }
+        if (!fixedUid.isNullOrBlank()) {
+          check(uid == fixedUid) { "Expected pinned UID '$fixedUid' in Auth Emulator, got '$uid'" }
+        }
+        updateEmulatorAccountAttributes(
+          uid = uid,
+          emailVerified = emailVerified,
+          customAttributesJson = customAttributesJson,
+        )
+        // Re-authenticate with credential after updating attributes so ID token claims reflect update
+        val refreshed = auth.signInWithCredential(credential).await()
+        val user = checkNotNull(refreshed.user) { "Google Auth emulator refresh failed" }
         user.getIdToken(true).await()
         user.uid
       }
     }
 
-  protected suspend fun signInVerifiedEmailUser(email: String): String =
-    withContext(Dispatchers.IO) {
-      withTimeout(AUTH_TIMEOUT_MS) {
-        val uid = signInTestUser(email)
-        val user = checkNotNull(auth.currentUser) { "User not signed in" }
-        val url =
-          java.net.URL(
-            "http://$EMULATOR_HOST:$AUTH_PORT/identitytoolkit.googleapis.com/v1/projects/$PROJECT_ID/accounts:update"
-          )
-        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
-          requestMethod = "POST"
-          doOutput = true
-          setRequestProperty("Content-Type", "application/json")
-          setRequestProperty("Authorization", "Bearer owner")
-        }
-        val body = """{"localId":"$uid","emailVerified":true}"""
-        conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-        check(conn.responseCode in 200..299) {
-          "Auth emulator emailVerified update failed: HTTP ${conn.responseCode}"
-        }
-        conn.disconnect()
-        user.getIdToken(true).await()
-        uid
-      }
-    }
+  protected suspend fun signInSingleOwnerAdmin(): String =
+    signInGoogleUserInEmulator(
+      email = JyCatalogDefaults.OWNER_ADMIN_EMAIL,
+      subject = "joshua_owner_google_sub",
+      emailVerified = true,
+      customAttributesJson = """{"jySingleAdmin":true,"role":"admin"}""",
+      fixedUid = JyCatalogDefaults.SINGLE_ADMIN_UID,
+    )
 
   protected suspend fun provisionEmailUserInEmulator(
     email: String,
     password: String,
     customAttributesJson: String? = null,
+    emailVerified: Boolean = true,
   ): String =
     withContext(Dispatchers.IO) {
       withTimeout(AUTH_TIMEOUT_MS) {
@@ -178,29 +288,11 @@ abstract class FirestoreEmulatorTestBase {
           }
         val user = checkNotNull(result.user) { "Provisioned user missing" }
         val uid = user.uid
-        val url =
-          java.net.URL(
-            "http://$EMULATOR_HOST:$AUTH_PORT/identitytoolkit.googleapis.com/v1/projects/$PROJECT_ID/accounts:update"
-          )
-        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
-          requestMethod = "POST"
-          doOutput = true
-          setRequestProperty("Content-Type", "application/json")
-          setRequestProperty("Authorization", "Bearer owner")
-        }
-        val payload =
-          JSONObject().apply {
-            put("localId", uid)
-            put("emailVerified", true)
-            if (customAttributesJson != null) {
-              put("customAttributes", customAttributesJson)
-            }
-          }
-        conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-        check(conn.responseCode in 200..299) {
-          "Auth emulator customAttributes update failed: HTTP ${conn.responseCode}"
-        }
-        conn.disconnect()
+        updateEmulatorAccountAttributes(
+          uid = uid,
+          emailVerified = emailVerified,
+          customAttributesJson = customAttributesJson,
+        )
         auth.signOut()
         uid
       }

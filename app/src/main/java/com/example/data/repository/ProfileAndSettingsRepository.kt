@@ -149,7 +149,15 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
   suspend fun isUidAdmin(uid: String): Boolean {
     return try {
       val currentUser = auth.currentUser ?: return false
-      if (currentUser.uid != uid || !JyCatalogDefaults.isOwnerAdminIdentity(uid, currentUser.email)) {
+      if (
+        uid != JyCatalogDefaults.SINGLE_ADMIN_UID ||
+          currentUser.uid != JyCatalogDefaults.SINGLE_ADMIN_UID ||
+          !JyCatalogDefaults.isOwnerAdminIdentity(
+            uid = currentUser.uid,
+            email = currentUser.email,
+            emailVerified = currentUser.isEmailVerified,
+          )
+      ) {
         return false
       }
       val tokenResult =
@@ -159,7 +167,7 @@ class ProfileAndSettingsRepository(private val db: FirebaseFirestore) {
       val hasSingleAdminClaim = claims["jySingleAdmin"] == true
       val hasAdminRoleClaim = claims["role"] == "admin"
       val signInProvider = tokenResult.signInProvider
-      hasSingleAdminClaim && hasAdminRoleClaim && signInProvider != "google.com"
+      hasSingleAdminClaim && hasAdminRoleClaim && signInProvider == "google.com"
     } catch (_: Exception) {
       false
     }

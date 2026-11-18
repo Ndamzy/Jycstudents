@@ -321,9 +321,15 @@ class FinanceRepository(private val db: FirebaseFirestore) {
     val cleanRef = reference.trim()
     if (cleanRef.length < 4) return "Transaction reference must be at least 4 characters."
     val refKey = JyCatalogDefaults.normalizePaymentReferenceKey(cleanRef)
+    if (refKey.length < 4) return "Transaction reference must contain at least 4 alphanumeric characters."
     val refDoc = db.collection("payment_references").document(refKey).get().await()
     if (refDoc.exists()) {
-      return "Duplicate transaction reference: '$cleanRef' has already been verified."
+      val status = refDoc.getString("status").orEmpty()
+      return if (status == "pending") {
+        "Duplicate transaction reference: '$cleanRef' is already pending verification."
+      } else {
+        "Duplicate transaction reference: '$cleanRef' has already been verified."
+      }
     }
     if (!ownerUid.isNullOrBlank()) {
       val existingMine =
@@ -392,6 +398,7 @@ class FinanceRepository(private val db: FirebaseFirestore) {
     val docRef = db.collection("payments").document()
     val cleanRef = reference.trim()
     val refKey = JyCatalogDefaults.normalizePaymentReferenceKey(cleanRef)
+    val refRegistryDoc = db.collection("payment_references").document(refKey)
     val itemId = enrollment?.programmeId ?: serviceRequest?.serviceId.orEmpty()
     val itemTitle = enrollment?.programmeTitle ?: serviceRequest?.serviceTitle.orEmpty()
     val category =
@@ -408,36 +415,47 @@ class FinanceRepository(private val db: FirebaseFirestore) {
         return Result.failure(IllegalStateException(dupError))
       }
 
-      docRef
-        .set(
-          mapOf(
-            "userId" to customerUid,
-            "studentName" to customerName,
-            "studentIdNumber" to customerIdNumber,
-            "enrollmentId" to (enrollment?.id ?: ""),
-            "serviceRequestId" to (serviceRequest?.id ?: ""),
-            "requestNumber" to (serviceRequest?.requestNumber ?: ""),
-            "invoiceNumber" to invoiceNo,
-            "programmeId" to itemId,
-            "programmeTitle" to itemTitle,
-            "serviceCategory" to category,
-            "amountNaira" to amountNaira,
-            "method" to method,
-            "reference" to cleanRef,
-            "referenceNormalized" to refKey,
-            "paymentDate" to paymentDate.trim(),
-            "senderName" to senderName.trim(),
-            "senderBank" to senderBank.trim().ifBlank { JyCatalogDefaults.OFFICIAL_OPAY_BANK },
-            "evidenceBase64" to evidenceBase64,
-            "status" to "pending",
-            "adminRemarks" to "",
-            "verifiedByUid" to "",
-            "verifiedByName" to "",
-            "createdAt" to FieldValue.serverTimestamp(),
-            "updatedAt" to FieldValue.serverTimestamp(),
-          )
-        )
-        .await()
+      val batch = db.batch()
+      batch.set(
+        docRef,
+        mapOf(
+          "userId" to customerUid,
+          "studentName" to customerName,
+          "studentIdNumber" to customerIdNumber,
+          "enrollmentId" to (enrollment?.id ?: ""),
+          "serviceRequestId" to (serviceRequest?.id ?: ""),
+          "requestNumber" to (serviceRequest?.requestNumber ?: ""),
+          "invoiceNumber" to invoiceNo,
+          "programmeId" to itemId,
+          "programmeTitle" to itemTitle,
+          "serviceCategory" to category,
+          "amountNaira" to amountNaira,
+          "method" to method,
+          "reference" to cleanRef,
+          "referenceNormalized" to refKey,
+          "paymentDate" to paymentDate.trim(),
+          "senderName" to senderName.trim(),
+          "senderBank" to senderBank.trim().ifBlank { JyCatalogDefaults.OFFICIAL_OPAY_BANK },
+          "evidenceBase64" to evidenceBase64,
+          "status" to "pending",
+          "adminRemarks" to "",
+          "verifiedByUid" to "",
+          "verifiedByName" to "",
+          "createdAt" to FieldValue.serverTimestamp(),
+          "updatedAt" to FieldValue.serverTimestamp(),
+        ),
+      )
+      batch.set(
+        refRegistryDoc,
+        mapOf(
+          "referenceNormalized" to refKey,
+          "paymentId" to docRef.id,
+          "status" to "pending",
+          "submittedByUid" to customerUid,
+          "createdAt" to FieldValue.serverTimestamp(),
+        ),
+      )
+      batch.commit().await()
       Result.success(docRef.id)
     } catch (e: CancellationException) {
       throw e
@@ -519,6 +537,8 @@ class FinanceRepository(private val db: FirebaseFirestore) {
         mapOf(
           "referenceNormalized" to refKey,
           "paymentId" to payRef.id,
+          "status" to "approved",
+          "submittedByUid" to targetUid,
           "createdAt" to FieldValue.serverTimestamp(),
         ),
       )
@@ -631,15 +651,20 @@ class FinanceRepository(private val db: FirebaseFirestore) {
     val refRegistryDoc = db.collection("payment_references").document(refKey)
 
     return try {
+      val existingRefDoc = refRegistryDoc.get().await()
+      val existingRefPaymentId = existingRefDoc.getString("paymentId").orEmpty()
+      val existingRefStatus = existingRefDoc.getString("status").orEmpty()
       if (approve) {
         if (payment.status == "approved") {
           return Result.failure(IllegalStateException("Payment ${payment.reference} is already approved."))
         }
-        val existingRefDoc = refRegistryDoc.get().await()
-        if (existingRefDoc.exists()) {
+        if (
+          existingRefDoc.exists() &&
+            (existingRefPaymentId != payment.id || existingRefStatus != "pending")
+        ) {
           return Result.failure(
             IllegalStateException(
-              "Duplicate reference blocked: '${payment.reference}' was already approved for another transaction."
+              "Duplicate reference blocked: '${payment.reference}' was already approved or claimed for another transaction."
             )
           )
         }
@@ -679,15 +704,34 @@ class FinanceRepository(private val db: FirebaseFirestore) {
         ),
       )
 
+      if (!approve) {
+        if (
+          existingRefDoc.exists() &&
+            existingRefPaymentId == payment.id &&
+            existingRefStatus == "pending"
+        ) {
+          batch.delete(refRegistryDoc)
+        }
+      }
+
       if (approve && payment.status != "approved") {
-        batch.set(
-          refRegistryDoc,
-          mapOf(
-            "referenceNormalized" to refKey,
-            "paymentId" to payment.id,
-            "createdAt" to FieldValue.serverTimestamp(),
-          ),
-        )
+        if (existingRefDoc.exists()) {
+          batch.update(
+            refRegistryDoc,
+            mapOf("status" to "approved"),
+          )
+        } else {
+          batch.set(
+            refRegistryDoc,
+            mapOf(
+              "referenceNormalized" to refKey,
+              "paymentId" to payment.id,
+              "status" to "approved",
+              "submittedByUid" to payment.userId,
+              "createdAt" to FieldValue.serverTimestamp(),
+            ),
+          )
+        }
 
         if (payment.enrollmentId.isNotBlank()) {
           val enrollmentRef = db.collection("enrollments").document(payment.enrollmentId)

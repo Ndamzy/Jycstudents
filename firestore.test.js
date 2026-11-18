@@ -13,11 +13,15 @@ const PROJECT_ID = process.env.GCP_PROJECT || "demo-no-project";
 const ALICE_UID = "alice_student_1";
 const BOB_UID = "bob_student_2";
 const INSTRUCTOR_UID = "instr_1";
-const ADMIN_UID = "jy_single_owner_admin";
+const OTHER_INSTRUCTOR_UID = "instr_2";
+const OWNER_ADMIN_UID = "msUb7EcbUye0HyBqCNMe7FCIKvA3";
+const OWNER_ADMIN_EMAIL = "joshua.dangana@gmail.com";
 const SINGLE_ADMIN_CLAIMS = {
+  email: OWNER_ADMIN_EMAIL,
+  email_verified: true,
   jySingleAdmin: true,
   role: "admin",
-  firebase: { sign_in_provider: "custom" },
+  firebase: { sign_in_provider: "google.com" },
 };
 
 const [emulatorHost, emulatorPortStr] = (process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8085").split(":");
@@ -129,37 +133,75 @@ test("Privilege escalation blocked: student cannot self-assign admin role, appro
   await assertFails(aliceDb.collection("users").doc(ALICE_UID).set({ ...validStudentProfile(ALICE_UID), isVerified: true }));
 });
 
-test("Google account & email spoofing test: Google Sign-In joshua.dangana@gmail.com is REJECTED from admin privileges", async () => {
-  const googleAdminSpoofDb = testEnv.authenticatedContext("google_uid_1", {
-    email: "joshua.dangana@gmail.com",
+test("Option A Owner Google Auth spoofing checks: rejects missing claims, unverified email, non-Google provider, and other Google accounts", async () => {
+  const ownerNoClaimsDb = testEnv.authenticatedContext("google_uid_no_claims", {
+    email: OWNER_ADMIN_EMAIL,
     email_verified: true,
     firebase: { sign_in_provider: "google.com" },
   }).firestore();
-  const spoofClaimsDb = testEnv.authenticatedContext("other_uid_with_claims", {
+  const ownerUnverifiedDb = testEnv.authenticatedContext("google_uid_unverified", {
+    email: OWNER_ADMIN_EMAIL,
+    email_verified: false,
+    jySingleAdmin: true,
+    role: "admin",
+    firebase: { sign_in_provider: "google.com" },
+  }).firestore();
+  const ownerPasswordProviderDb = testEnv.authenticatedContext("owner_password_uid", {
+    email: OWNER_ADMIN_EMAIL,
+    email_verified: true,
+    jySingleAdmin: true,
+    role: "admin",
+    firebase: { sign_in_provider: "password" },
+  }).firestore();
+  const spoofOtherEmailClaimsDb = testEnv.authenticatedContext("other_uid_with_claims", {
+    email: "attacker@gmail.com",
+    email_verified: true,
+    jySingleAdmin: true,
+    role: "admin",
+    firebase: { sign_in_provider: "google.com" },
+  }).firestore();
+  const legacyAdminEmailDb = testEnv.authenticatedContext("legacy_admin_uid", {
+    email: "admin@jy-computers.com",
+    email_verified: true,
+    jySingleAdmin: true,
+    role: "admin",
+    firebase: { sign_in_provider: "password" },
+  }).firestore();
+  const wrongUidWithOwnerClaimsDb = testEnv.authenticatedContext("wrong_uid_owner_spoof", {
+    email: OWNER_ADMIN_EMAIL,
+    email_verified: true,
     jySingleAdmin: true,
     role: "admin",
     firebase: { sign_in_provider: "google.com" },
   }).firestore();
 
-  await assertFails(
-    googleAdminSpoofDb.collection("programmes").doc("prog_1").set({
-      title: "Hacked Course",
-      description: "Spoofed",
-      duration: "1 Month",
-      feeNaira: 1000,
-      category: "Foundation",
-      level: "Beginner",
-      active: true,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    })
-  );
-  await assertFails(googleAdminSpoofDb.collection("activity_logs").get());
-  await assertFails(spoofClaimsDb.collection("activity_logs").get());
+  const progData = {
+    title: "Hacked Course",
+    description: "Spoofed",
+    duration: "1 Month",
+    feeNaira: 1000,
+    category: "Foundation",
+    level: "Beginner",
+    active: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  for (const deniedDb of [
+    ownerNoClaimsDb,
+    ownerUnverifiedDb,
+    ownerPasswordProviderDb,
+    spoofOtherEmailClaimsDb,
+    legacyAdminEmailDb,
+    wrongUidWithOwnerClaimsDb,
+  ]) {
+    await assertFails(deniedDb.collection("programmes").doc("prog_spoof").set(progData));
+    await assertFails(deniedDb.collection("activity_logs").get());
+  }
 });
 
-test("Single Owner Admin (custom-token jy_single_owner_admin) can manage programmes and append activity_logs", async () => {
-  const adminDb = testEnv.authenticatedContext(ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
+test("Single Owner Google Admin (joshua.dangana@gmail.com + claims) can manage programmes and append activity_logs", async () => {
+  const adminDb = testEnv.authenticatedContext(OWNER_ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
 
   await assertSucceeds(
     adminDb.collection("programmes").doc("basic_computer").set({
@@ -180,8 +222,8 @@ test("Single Owner Admin (custom-token jy_single_owner_admin) can manage program
 
   await assertSucceeds(
     adminDb.collection("activity_logs").doc("log_1").set({
-      actorUid: ADMIN_UID,
-      actorName: "JY Owner Administrator",
+      actorUid: OWNER_ADMIN_UID,
+      actorName: "Joshua Dangana",
       action: "CREATE_COURSE",
       targetId: "basic_computer",
       details: "Created Basic Computer Course",
@@ -208,11 +250,21 @@ test("Single Owner Admin (custom-token jy_single_owner_admin) can manage program
 });
 
 test("Single-Administrator Isolation: cannot create 2nd admin, escalate student role to admin, or read/write server-only security collections", async () => {
-  const adminDb = testEnv.authenticatedContext(ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
+  const adminDb = testEnv.authenticatedContext(OWNER_ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
 
   // Seed Alice profile
   await assertSucceeds(aliceDb.collection("users").doc(ALICE_UID).set(validStudentProfile(ALICE_UID)));
+
+  // Owner Admin CAN write own /admins/{OWNER_ADMIN_UID} directory doc
+  await assertSucceeds(
+    adminDb.collection("admins").doc(OWNER_ADMIN_UID).set({
+      uid: OWNER_ADMIN_UID,
+      email: OWNER_ADMIN_EMAIL,
+      fullName: "Joshua Dangana",
+      createdAt: serverTimestamp(),
+    })
+  );
 
   // Attempting to create a second admin doc in /admins/{otherUid} is strictly rejected even by Admin
   await assertFails(
@@ -247,76 +299,12 @@ test("Single-Administrator Isolation: cannot create 2nd admin, escalate student 
   await assertFails(adminDb.collection("admin_auth_audit").get());
 });
 
-test("Firebase Email/Password Mapped Admin (admin@jy-computers.com): requires server custom claims & still blocks 2nd admin", async () => {
-  const mappedAdminClaimsDb = testEnv.authenticatedContext("console_uid_admin_1", {
-    email: "admin@jy-computers.com",
-    email_verified: true,
-    jySingleAdmin: true,
-    role: "admin",
-    firebase: { sign_in_provider: "password" },
-  }).firestore();
-
-  const mappedAdminNoClaimsDb = testEnv.authenticatedContext("console_uid_admin_unclaimed", {
-    email: "admin@jy-computers.com",
-    email_verified: true,
-    firebase: { sign_in_provider: "password" },
-  }).firestore();
-
-  const studentWithAdminClaimSpoofDb = testEnv.authenticatedContext("student_other_email", {
-    email: "student@example.com",
-    email_verified: true,
-    jySingleAdmin: true,
-    role: "admin",
-    firebase: { sign_in_provider: "password" },
-  }).firestore();
-
-  const progDoc = {
-    title: "Mapped Admin Course",
-    description: "Valid admin write",
-    duration: "1 Month",
-    feeNaira: 30000,
-    category: "Foundation",
-    level: "Beginner",
-    instructorUid: "",
-    instructorName: "Staff",
-    scheduleText: "Mon - Wed",
-    active: true,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  };
-
-  // Mapped admin WITH custom claims succeeds on admin collections & own /admins/{uid}
-  await assertSucceeds(mappedAdminClaimsDb.collection("programmes").doc("mapped_prog").set(progDoc));
-  await assertSucceeds(
-    mappedAdminClaimsDb.collection("admins").doc("console_uid_admin_1").set({
-      uid: "console_uid_admin_1",
-      email: "admin@jy-computers.com",
-      fullName: "Administrator",
-      createdAt: serverTimestamp(),
-    })
-  );
-  // Still CANNOT create a second admin under another UID
-  await assertFails(
-    mappedAdminClaimsDb.collection("admins").doc("another_uid_2").set({
-      uid: "another_uid_2",
-      email: "second@jy-computers.com",
-      fullName: "Second",
-      createdAt: serverTimestamp(),
-    })
-  );
-
-  // Mapped email WITHOUT custom claims is strictly DENIED
-  await assertFails(mappedAdminNoClaimsDb.collection("programmes").doc("unclaimed_prog").set(progDoc));
-  // Unmapped student email even with claims cannot write admin docs
-  await assertFails(studentWithAdminClaimSpoofDb.collection("programmes").doc("spoof_prog").set(progDoc));
-});
-
 test("Write-only Admin Auth Audit Log (/admin_auth_audit): denies ALL client reads, creates, updates, and deletes (including Single Owner Admin)", async () => {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     await ctx.firestore().collection("admin_auth_audit").doc("audit_seed_1").set({
       eventType: "ADMIN_LOGIN_SUCCESS",
       outcome: "success",
-      targetUid: ADMIN_UID,
+      targetUid: OWNER_ADMIN_UID,
       usernameMatched: true,
       reason: "Seeded by server Admin SDK",
       clientIp: "127.0.0.1",
@@ -328,12 +316,12 @@ test("Write-only Admin Auth Audit Log (/admin_auth_audit): denies ALL client rea
 
   const unauthDb = testEnv.unauthenticatedContext().firestore();
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
-  const adminDb = testEnv.authenticatedContext(ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
+  const adminDb = testEnv.authenticatedContext(OWNER_ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
 
   const forgedEntry = {
     eventType: "ADMIN_LOGIN_SUCCESS",
     outcome: "success",
-    targetUid: ADMIN_UID,
+    targetUid: OWNER_ADMIN_UID,
     usernameMatched: true,
     reason: "Client-forged audit attempt",
     clientIp: "0.0.0.0",
@@ -486,7 +474,7 @@ test("Chat Room & Messages: direct room isolated to members; public group room a
 });
 
 test("Services & Service Requests: signed-in read, admin manages services, customer creates unpaid pending request", async () => {
-  const adminDb = testEnv.authenticatedContext(ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
+  const adminDb = testEnv.authenticatedContext(OWNER_ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
 
@@ -563,7 +551,7 @@ test("Services & Service Requests: signed-in read, admin manages services, custo
 });
 
 test("Universal Service Payment & Payment References: serviceRequestId allowed, reference registry immutable & admin-only", async () => {
-  const adminDb = testEnv.authenticatedContext(ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
+  const adminDb = testEnv.authenticatedContext(OWNER_ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
 
   const servicePayment = {
@@ -644,6 +632,267 @@ test("Chat rooms: non-admin can check existence of general lounge and DM rooms w
     updatedAt: serverTimestamp(),
   }));
   await assertSucceeds(bobDb.collection("chat_rooms").doc("general_student_lounge").get());
+});
+
+test("Tightened Instructor Permissions: assigned-course isolation across enrollments, attendance, results, and notifications", async () => {
+  const adminDb = testEnv.authenticatedContext(OWNER_ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
+  const instr1Db = testEnv.authenticatedContext(INSTRUCTOR_UID).firestore();
+  const instr2Db = testEnv.authenticatedContext(OTHER_INSTRUCTOR_UID).firestore();
+
+  // Seed two instructors, two programmes, and an enrollment under prog_a (assigned to INSTRUCTOR_UID)
+  await assertSucceeds(adminDb.collection("instructors").doc(INSTRUCTOR_UID).set({
+    uid: INSTRUCTOR_UID,
+    fullName: "Engr. Musa",
+    email: "musa@jy-computers.com",
+    specialization: "Software",
+    assignedCourseIds: ["prog_a"],
+    active: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(adminDb.collection("instructors").doc(OTHER_INSTRUCTOR_UID).set({
+    uid: OTHER_INSTRUCTOR_UID,
+    fullName: "Mrs. Grace",
+    email: "grace@jy-computers.com",
+    specialization: "Hardware",
+    assignedCourseIds: ["prog_b"],
+    active: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(adminDb.collection("programmes").doc("prog_a").set({
+    title: "Coding A",
+    description: "Course A",
+    duration: "3 Months",
+    feeNaira: 100000,
+    category: "Software",
+    level: "Beginner",
+    instructorUid: INSTRUCTOR_UID,
+    instructorName: "Engr. Musa",
+    active: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(adminDb.collection("programmes").doc("prog_b").set({
+    title: "Hardware B",
+    description: "Course B",
+    duration: "3 Months",
+    feeNaira: 100000,
+    category: "Hardware",
+    level: "Beginner",
+    instructorUid: OTHER_INSTRUCTOR_UID,
+    instructorName: "Mrs. Grace",
+    active: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(adminDb.collection("enrollments").doc("enr_prog_a").set({
+    userId: ALICE_UID,
+    studentName: "Alice Johnson",
+    studentIdNumber: "JYC-2026-1001",
+    programmeId: "prog_a",
+    programmeTitle: "Coding A",
+    instructorUid: INSTRUCTOR_UID,
+    session: "2026/2027",
+    totalFeeNaira: 100000,
+    amountPaidNaira: 0,
+    status: "active",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+
+  // Assigned instructor CAN read assigned enrollment & record attendance/results for prog_a
+  await assertSucceeds(instr1Db.collection("enrollments").doc("enr_prog_a").get());
+  await assertSucceeds(instr1Db.collection("attendance").doc("prog_a_2026-11-16_alice").set({
+    studentUid: ALICE_UID,
+    studentName: "Alice Johnson",
+    studentIdNumber: "JYC-2026-1001",
+    programmeId: "prog_a",
+    programmeTitle: "Coding A",
+    instructorUid: INSTRUCTOR_UID,
+    dateKey: "2026-11-16",
+    status: "present",
+    markedByUid: INSTRUCTOR_UID,
+    remarks: "",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(instr1Db.collection("results").doc("prog_a_alice").set({
+    studentUid: ALICE_UID,
+    studentName: "Alice Johnson",
+    studentIdNumber: "JYC-2026-1001",
+    programmeId: "prog_a",
+    programmeTitle: "Coding A",
+    instructorUid: INSTRUCTOR_UID,
+    session: "2026/2027",
+    assignmentScore: 30,
+    examScore: 50,
+    totalScore: 80,
+    grade: "A",
+    remarks: "Good",
+    published: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+
+  // Assigned instructor CAN create result/attendance notifications, CANNOT forge payment/certificate/registration notifications
+  await assertSucceeds(instr1Db.collection("notifications").doc("notif_res_1").set({
+    userId: ALICE_UID,
+    title: "Result Published",
+    message: "Coding A: 80/100",
+    type: "result",
+    isRead: false,
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(instr1Db.collection("notifications").doc("notif_pay_spoof").set({
+    userId: ALICE_UID,
+    title: "Payment Approved",
+    message: "Spoofed payment confirmation",
+    type: "payment",
+    isRead: false,
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(instr1Db.collection("notifications").doc("notif_cert_spoof").set({
+    userId: ALICE_UID,
+    title: "Certificate Ready",
+    message: "Spoofed cert",
+    type: "certificate",
+    isRead: false,
+    createdAt: serverTimestamp(),
+  }));
+
+  // Unassigned instructor (instr2) CANNOT read prog_a enrollment, attendance, results, or write attendance/results for prog_a
+  await assertFails(instr2Db.collection("enrollments").doc("enr_prog_a").get());
+  await assertFails(instr2Db.collection("attendance").doc("prog_a_2026-11-16_alice").get());
+  await assertFails(instr2Db.collection("results").doc("prog_a_alice").get());
+  await assertFails(instr2Db.collection("attendance").doc("prog_a_2026-11-17_alice").set({
+    studentUid: ALICE_UID,
+    studentName: "Alice Johnson",
+    studentIdNumber: "JYC-2026-1001",
+    programmeId: "prog_a",
+    programmeTitle: "Coding A",
+    instructorUid: OTHER_INSTRUCTOR_UID,
+    dateKey: "2026-11-17",
+    status: "present",
+    markedByUid: OTHER_INSTRUCTOR_UID,
+    remarks: "",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(instr2Db.collection("results").doc("prog_a_alice").update({
+    examScore: 59,
+    totalScore: 89,
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test("Pending payment_references lock: atomic pending submission blocks cross-user duplicates, admin approval freezes, admin rejection releases", async () => {
+  const adminDb = testEnv.authenticatedContext(OWNER_ADMIN_UID, SINGLE_ADMIN_CLAIMS).firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+
+  const refKey1 = "OPAY-PEND-101";
+  const aliceBatch = aliceDb.batch();
+  aliceBatch.set(aliceDb.collection("payments").doc("pay_alice_101"), {
+    userId: ALICE_UID,
+    studentName: "Alice Johnson",
+    studentIdNumber: "JYC-2026-1001",
+    enrollmentId: "enr_1",
+    serviceRequestId: "",
+    programmeId: "prog_coding",
+    programmeTitle: "Coding Programme",
+    amountNaira: 25000,
+    method: "opay_transfer",
+    reference: refKey1,
+    referenceNormalized: refKey1,
+    paymentDate: "2026-11-16",
+    senderName: "Alice Johnson",
+    senderBank: "OPay",
+    evidenceBase64: "",
+    status: "pending",
+    adminRemarks: "",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  aliceBatch.set(aliceDb.collection("payment_references").doc(refKey1), {
+    referenceNormalized: refKey1,
+    paymentId: "pay_alice_101",
+    status: "pending",
+    submittedByUid: ALICE_UID,
+    createdAt: serverTimestamp(),
+  });
+  await assertSucceeds(aliceBatch.commit());
+
+  // Bob CANNOT submit a second pending payment reusing OPAY-PEND-101
+  const bobDupBatch = bobDb.batch();
+  bobDupBatch.set(bobDb.collection("payments").doc("pay_bob_101"), {
+    userId: BOB_UID,
+    studentName: "Bob Smith",
+    studentIdNumber: "JYC-2026-1002",
+    enrollmentId: "enr_2",
+    serviceRequestId: "",
+    programmeId: "prog_coding",
+    programmeTitle: "Coding Programme",
+    amountNaira: 25000,
+    method: "opay_transfer",
+    reference: refKey1,
+    referenceNormalized: refKey1,
+    paymentDate: "2026-11-16",
+    senderName: "Bob Smith",
+    senderBank: "OPay",
+    evidenceBase64: "",
+    status: "pending",
+    adminRemarks: "",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  bobDupBatch.set(bobDb.collection("payment_references").doc(refKey1), {
+    referenceNormalized: refKey1,
+    paymentId: "pay_bob_101",
+    status: "pending",
+    submittedByUid: BOB_UID,
+    createdAt: serverTimestamp(),
+  });
+  await assertFails(bobDupBatch.commit());
+
+  // Admin can promote pending -> approved, after which update & delete are forbidden
+  await assertSucceeds(adminDb.collection("payment_references").doc(refKey1).update({ status: "approved" }));
+  await assertFails(adminDb.collection("payment_references").doc(refKey1).update({ status: "pending" }));
+  await assertFails(adminDb.collection("payment_references").doc(refKey1).delete());
+
+  // Admin rejecting a pending reference CAN delete the pending lock so it can be reused
+  const refKey2 = "OPAY-PEND-102";
+  const bobBatch2 = bobDb.batch();
+  bobBatch2.set(bobDb.collection("payments").doc("pay_bob_102"), {
+    userId: BOB_UID,
+    studentName: "Bob Smith",
+    studentIdNumber: "JYC-2026-1002",
+    enrollmentId: "enr_2",
+    serviceRequestId: "",
+    programmeId: "prog_coding",
+    programmeTitle: "Coding Programme",
+    amountNaira: 25000,
+    method: "opay_transfer",
+    reference: refKey2,
+    referenceNormalized: refKey2,
+    paymentDate: "2026-11-16",
+    senderName: "Bob Smith",
+    senderBank: "OPay",
+    evidenceBase64: "",
+    status: "pending",
+    adminRemarks: "",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  bobBatch2.set(bobDb.collection("payment_references").doc(refKey2), {
+    referenceNormalized: refKey2,
+    paymentId: "pay_bob_102",
+    status: "pending",
+    submittedByUid: BOB_UID,
+    createdAt: serverTimestamp(),
+  });
+  await assertSucceeds(bobBatch2.commit());
+  await assertSucceeds(adminDb.collection("payment_references").doc(refKey2).delete());
 });
 
 

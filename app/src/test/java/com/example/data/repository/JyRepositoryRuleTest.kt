@@ -26,6 +26,7 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
     val profileRepo = ProfileAndSettingsRepository(firestore)
     val academicRepo = CourseAndAcademicRepository(firestore)
 
+    val fakeCompressedPassportPhoto = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgK"
     val profile =
       UserProfile(
         userId = uid,
@@ -41,6 +42,7 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
         localGovernmentArea = "AMAC",
         nextOfKin = "Grace Student",
         nextOfKinPhone = "08099887766",
+        passportPhotoBase64 = fakeCompressedPassportPhoto,
         selectedProgrammeId = "coding_programme",
         selectedProgrammeTitle = "Coding Programme",
         trainingLevel = "Intermediate",
@@ -58,6 +60,15 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
     assertEquals("Alice Student", loadedProfile?.fullName)
     assertEquals("AMAC", loadedProfile?.localGovernmentArea)
     assertEquals("Intermediate", loadedProfile?.trainingLevel)
+    assertEquals(fakeCompressedPassportPhoto, loadedProfile?.passportPhotoBase64)
+
+    // Oversized passport payload (>350,000 chars) must be rejected by Firestore rules
+    val oversizedPhoto = "A".repeat(360_000)
+    val oversizedResult =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        profileRepo.updateStudentProfile(profile.copy(passportPhotoBase64 = oversizedPhoto))
+      }
+    assertTrue("Oversized passport photograph must fail Firestore rules", oversizedResult.isFailure)
 
     val updateResult =
       withTimeout(DEFAULT_TIMEOUT_MS) {
@@ -104,10 +115,11 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
           reference = ref1,
           paymentDate = "2026-11-13",
           senderName = "Alice Student",
-          evidenceBase64 = "",
+          evidenceBase64 = fakeCompressedPassportPhoto,
         )
       }
     assertTrue(payResult.isSuccess)
+    val opayPaymentId = payResult.getOrThrow()
 
     // Submitting the same reference again must be blocked
     val dupResult =
@@ -154,6 +166,39 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
       cashDenied = e.unwrapFirestoreException()?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
     }
     assertTrue("Students must not create cash payments directly", cashDenied)
+
+    // Owner Admin verifies & approves OPay tuition payment -> updates enrollment + profile paymentStatus
+    signInSingleOwnerAdmin()
+    val pendingOpay =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        firestore.collection("payments").document(opayPaymentId).get().await().toObject(Payment::class.java)!!
+      }
+    assertEquals("opay_transfer", pendingOpay.method)
+    assertEquals("pending", pendingOpay.status)
+
+    val approveOpay =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        financeRepo.adminReviewPayment(
+          payment = pendingOpay,
+          approve = true,
+          adminRemarks = "Confirmed in OPay 6118366524 business ledger",
+          actorName = "Joshua Dangana",
+        )
+      }
+    assertTrue("Admin OPay approval failed: ${approveOpay.exceptionOrNull()}", approveOpay.isSuccess)
+
+    val updatedEnrollment =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        firestore.collection("enrollments").document(enrollmentId).get().await()
+      }
+    assertEquals(200_000L, updatedEnrollment.getLong("amountPaidNaira"))
+    assertEquals("active", updatedEnrollment.getString("status"))
+
+    val updatedUser =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        firestore.collection("users").document(uid).get().await()
+      }
+    assertEquals("pending", updatedUser.getString("paymentStatus"))
   }
 
   @Test
@@ -216,6 +261,27 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
       }
     assertTrue(transferRes.isSuccess)
     val paymentId = transferRes.getOrThrow()
+
+    // Second customer trying to reuse the SAME pending reference must be blocked immediately
+    val secondCustomerUid = signInTestUser("other_customer_${UUID.randomUUID()}@test.com")
+    val secondTransferDup =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        financeRepo.submitUniversalPayment(
+          customerUid = secondCustomerUid,
+          customerName = "Duplicate Attacker",
+          customerIdNumber = "JYC-2026-8899",
+          enrollment = null,
+          serviceRequest = serviceRequest.copy(userId = secondCustomerUid),
+          amountNaira = nyscService.defaultFeeNaira,
+          method = "opay_transfer",
+          reference = refCode.lowercase(),
+          paymentDate = "2026-11-14",
+          senderName = "Duplicate Attacker",
+          senderBank = "OPay",
+          evidenceBase64 = "",
+        )
+      }
+    assertTrue("Cross-user duplicate pending reference must fail", secondTransferDup.isFailure)
 
     // Admin reviews & approves the payment
     val adminUid = signInSingleOwnerAdmin()
@@ -448,6 +514,55 @@ class JyRepositoryRuleTest : FirestoreEmulatorTestBase() {
         )
       }
     assertTrue("Instructor recordAttendance failed: ${attRes.exceptionOrNull()}", attRes.isSuccess)
+
+    // Another instructor NOT assigned to progId must be denied when attempting to mark attendance or grade results
+    val otherInstEmail = "other_inst_${UUID.randomUUID()}@test.com"
+    val otherInstUid = signInTestUser(otherInstEmail)
+    signInSingleOwnerAdmin()
+    withTimeout(DEFAULT_TIMEOUT_MS) {
+      profileRepo.registerOrCreateUserProfile(
+        stuProfile.copy(userId = otherInstUid, studentIdNumber = "JYC-2026-7799", fullName = "Unassigned Inst", email = otherInstEmail),
+        targetUid = otherInstUid,
+      )
+      profileRepo.adminAssignRole(
+        targetUid = otherInstUid,
+        fullName = "Unassigned Inst",
+        email = otherInstEmail,
+        role = "instructor",
+        specialization = "Hardware",
+        assignedCourseIds = emptyList(),
+        actorName = "Dr. Joshua Dangana",
+      )
+    }
+    signInTestUser(otherInstEmail)
+    val unassignedAtt =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        academicRepo.recordAttendance(
+          studentUid = stuUid,
+          studentName = "Tunde Learner",
+          studentIdNumber = "JYC-2026-7721",
+          programme = prog.copy(instructorUid = otherInstUid),
+          dateKey = "2026-11-15",
+          status = "present",
+        )
+      }
+    assertTrue("Unassigned instructor recordAttendance must fail", unassignedAtt.isFailure)
+    val unassignedRes =
+      withTimeout(DEFAULT_TIMEOUT_MS) {
+        academicRepo.saveAcademicResult(
+          resultId = null,
+          studentUid = stuUid,
+          studentName = "Tunde Learner",
+          studentIdNumber = "JYC-2026-7721",
+          programme = prog.copy(instructorUid = otherInstUid),
+          session = "2026/2027 Session",
+          assignmentScore = 30L,
+          examScore = 50L,
+          remarks = "Spoofed grade",
+          published = true,
+        )
+      }
+    assertTrue("Unassigned instructor saveAcademicResult must fail", unassignedRes.isFailure)
 
     // Verify general student lounge and 1-to-1 direct chat work for non-admin students
     signInTestUser(stuEmail)

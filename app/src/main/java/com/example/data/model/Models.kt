@@ -352,17 +352,19 @@ data class ActivityLog(
 )
 
 object JyCatalogDefaults {
-  const val SINGLE_ADMIN_UID = "jy_single_owner_admin"
+  const val SINGLE_ADMIN_UID = "msUb7EcbUye0HyBqCNMe7FCIKvA3"
   const val SINGLE_ADMIN_ROLE_LABEL = "Single Owner Administrator"
-  const val ADMIN_LOGIN_USERNAME = "admin"
-  const val ADMIN_MAPPED_EMAIL = "admin@jy-computers.com"
+  const val OWNER_ADMIN_EMAIL = "joshua.dangana@gmail.com"
 
-  fun resolveAdminAuthEmail(username: String): String? =
-    if (username.trim() == ADMIN_LOGIN_USERNAME) ADMIN_MAPPED_EMAIL else null
-
-  fun isOwnerAdminIdentity(uid: String, email: String? = null): Boolean =
-    uid == SINGLE_ADMIN_UID ||
-      (!email.isNullOrBlank() && email.trim().equals(ADMIN_MAPPED_EMAIL, ignoreCase = true))
+  fun isOwnerAdminIdentity(
+    uid: String,
+    email: String? = null,
+    emailVerified: Boolean = true,
+  ): Boolean =
+    uid.trim() == SINGLE_ADMIN_UID &&
+      emailVerified &&
+      !email.isNullOrBlank() &&
+      email.trim().equals(OWNER_ADMIN_EMAIL, ignoreCase = true)
 
   const val OFFICIAL_PRIMARY_PHONE = "08156879310"
   const val OFFICIAL_ALT_PHONE = "09167689248"

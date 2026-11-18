@@ -90,10 +90,11 @@ private fun JyComputersRootContent(
 
   val authStateFlow = remember { Firebase.auth.authStateFlow() }
   val currentUser by authStateFlow.collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
+  val adminLoginInProgress by AdminAuthClient.loginInProgress.collectAsStateWithLifecycle()
 
   var preAuthRoute by rememberSaveable { mutableStateOf(AppRoutes.SPLASH) }
 
-  val user = currentUser
+  val user = if (adminLoginInProgress) null else currentUser
   if (user == null) {
     when (preAuthRoute) {
       AppRoutes.SPLASH ->
@@ -144,6 +145,7 @@ private fun JyComputersRootContent(
                   currentUserId = user.uid,
                   currentUserEmail = user.email.orEmpty(),
                   currentUserDisplayName = user.displayName ?: user.email ?: "JY Student",
+                  currentUserEmailVerified = user.isEmailVerified,
                 )
               }
             },

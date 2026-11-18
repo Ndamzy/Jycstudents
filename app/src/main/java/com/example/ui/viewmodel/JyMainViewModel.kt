@@ -60,6 +60,7 @@ class JyMainViewModel(
   val currentUserId: String,
   val currentUserEmail: String,
   val currentUserDisplayName: String,
+  val currentUserEmailVerified: Boolean = true,
 ) : ViewModel() {
 
   private val _isAdminVerified = MutableStateFlow(false)
@@ -67,6 +68,9 @@ class JyMainViewModel(
 
   private val _isInstructorVerified = MutableStateFlow(false)
   val isInstructorVerified: StateFlow<Boolean> = _isInstructorVerified.asStateFlow()
+
+  private val _roleVerificationComplete = MutableStateFlow(false)
+  val roleVerificationComplete: StateFlow<Boolean> = _roleVerificationComplete.asStateFlow()
 
   private val _workspaceOverride = MutableStateFlow<String?>(null)
   val workspaceOverride: StateFlow<String?> = _workspaceOverride.asStateFlow()
@@ -160,20 +164,24 @@ class JyMainViewModel(
 
   init {
     viewModelScope.launch {
-      val admin = profileRepo.isUidAdmin(currentUserId)
-      _isAdminVerified.value = admin
-      if (!admin) {
-        _isInstructorVerified.value = profileRepo.isUidInstructor(currentUserId)
+      try {
+        val admin = profileRepo.isUidAdmin(currentUserId)
+        _isAdminVerified.value = admin
+        if (!admin) {
+          _isInstructorVerified.value = profileRepo.isUidInstructor(currentUserId)
+        } else {
+          AdminAuthClient.syncDirectFirebaseSession(currentUserId)
+          profileRepo.seedInitialInstitutionIfNeeded()
+          profileRepo.ensureAdminDirectoryEntry(
+            uid = currentUserId,
+            fullName = currentUserDisplayName,
+            email = currentUserEmail,
+          )
+        }
+        profileRepo.updateOnlinePresence(true)
+      } finally {
+        _roleVerificationComplete.value = true
       }
-      if (admin) {
-        profileRepo.seedInitialInstitutionIfNeeded()
-        profileRepo.ensureAdminDirectoryEntry(
-          uid = currentUserId,
-          fullName = currentUserDisplayName,
-          email = currentUserEmail,
-        )
-      }
-      profileRepo.updateOnlinePresence(true)
     }
   }
 
@@ -215,7 +223,13 @@ class JyMainViewModel(
 
   fun validateActiveAdminSession(onExpired: () -> Unit) {
     if (!_isAdminVerified.value) return
-    if (!JyCatalogDefaults.isOwnerAdminIdentity(currentUserId, currentUserEmail)) {
+    if (
+      !JyCatalogDefaults.isOwnerAdminIdentity(
+        uid = currentUserId,
+        email = currentUserEmail,
+        emailVerified = currentUserEmailVerified,
+      )
+    ) {
       _isAdminVerified.value = false
       onExpired()
       return
@@ -229,25 +243,18 @@ class JyMainViewModel(
       }
       return
     }
-    if (AdminAuthClient.hasActiveSession()) {
-      viewModelScope.launch {
-        val valid = AdminAuthClient.refreshSession()
-        if (!valid) {
-          AdminAuthClient.logout()
-          _isAdminVerified.value = false
-          _feedbackMessage.value = "Administrator session ended. Please sign in again."
-          onExpired()
+    viewModelScope.launch {
+      val valid =
+        if (AdminAuthClient.hasActiveSession()) {
+          AdminAuthClient.refreshSession() && profileRepo.isUidAdmin(currentUserId)
+        } else {
+          profileRepo.isUidAdmin(currentUserId)
         }
-      }
-    } else if (!AdminAuthClient.isBackendConfigured()) {
-      viewModelScope.launch {
-        val stillAdmin = profileRepo.isUidAdmin(currentUserId)
-        if (!stillAdmin) {
-          AdminAuthClient.logout()
-          _isAdminVerified.value = false
-          _feedbackMessage.value = "Administrator authorization could not be verified."
-          onExpired()
-        }
+      if (!valid) {
+        AdminAuthClient.logout()
+        _isAdminVerified.value = false
+        _feedbackMessage.value = "Administrator session ended or authorization could not be verified."
+        onExpired()
       }
     }
   }

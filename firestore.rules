@@ -17,26 +17,33 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() &&
+        request.auth.uid == 'msUb7EcbUye0HyBqCNMe7FCIKvA3' &&
+        ('email' in request.auth.token) &&
+        request.auth.token.email == 'joshua.dangana@gmail.com' &&
+        ('email_verified' in request.auth.token) &&
+        request.auth.token.email_verified == true &&
         ('jySingleAdmin' in request.auth.token) &&
         request.auth.token.jySingleAdmin == true &&
         ('role' in request.auth.token) &&
         request.auth.token.role == 'admin' &&
-        (!('firebase' in request.auth.token) ||
-         !('sign_in_provider' in request.auth.token.firebase) ||
-         request.auth.token.firebase.sign_in_provider != 'google.com') &&
-        (
-          request.auth.uid == 'jy_single_owner_admin' ||
-          (('email' in request.auth.token) &&
-           request.auth.token.email == 'admin@jy-computers.com')
-        );
+        ('firebase' in request.auth.token) &&
+        ('sign_in_provider' in request.auth.token.firebase) &&
+        request.auth.token.firebase.sign_in_provider == 'google.com';
     }
 
     function isOwnerAdminDoc(uid) {
-      return uid == 'jy_single_owner_admin' || uid == request.auth.uid;
+      return uid == 'msUb7EcbUye0HyBqCNMe7FCIKvA3' && isAdmin();
     }
 
     function isInstructor() {
       return isSignedIn() && exists(/databases/$(database)/documents/instructors/$(request.auth.uid));
+    }
+
+    function isAssignedCourseInstructor(programmeId) {
+      return isInstructor() &&
+        isValidId(programmeId) &&
+        exists(/databases/$(database)/documents/programmes/$(programmeId)) &&
+        get(/databases/$(database)/documents/programmes/$(programmeId)).data.instructorUid == request.auth.uid;
     }
 
     // --- VALIDATION HELPERS ---
@@ -189,6 +196,8 @@ service cloud.firestore {
     function isValidPaymentReference(data) {
       return data.referenceNormalized is string && data.referenceNormalized.size() >= 4 && data.referenceNormalized.size() <= 100 &&
              data.paymentId is string && data.paymentId.size() >= 1 && data.paymentId.size() <= 128 &&
+             (!('status' in data) || data.status in ['pending', 'approved']) &&
+             (!('submittedByUid' in data) || (data.submittedByUid is string && data.submittedByUid.size() <= 128)) &&
              data.createdAt is timestamp && data.createdAt <= request.time;
     }
 
@@ -481,7 +490,9 @@ service cloud.firestore {
 
     match /enrollments/{enrollmentId} {
       allow get: if isSignedIn() && isValidId(enrollmentId) && (
-        isAdmin() || isInstructor() || (resource != null && existing().userId == request.auth.uid)
+        isAdmin() ||
+        (resource != null && existing().userId == request.auth.uid) ||
+        (isInstructor() && resource != null && existing().instructorUid == request.auth.uid)
       );
       allow list: if isSignedIn() && (
         existing().userId == request.auth.uid ||
@@ -518,8 +529,25 @@ service cloud.firestore {
     match /payment_references/{refKey} {
       allow get: if isSignedIn() && isValidId(refKey);
       allow list: if isAdmin();
-      allow create: if isAdmin() && isValidId(refKey) && isValidPaymentReference(incoming());
-      allow update, delete: if false;
+      allow create: if isValidId(refKey) && isValidPaymentReference(incoming()) &&
+                       incoming().referenceNormalized == refKey && (
+        isAdmin() ||
+        (isSignedIn() &&
+         ('status' in incoming()) && incoming().status == 'pending' &&
+         ('submittedByUid' in incoming()) && incoming().submittedByUid == request.auth.uid &&
+         existsAfter(/databases/$(database)/documents/payments/$(incoming().paymentId)) &&
+         getAfter(/databases/$(database)/documents/payments/$(incoming().paymentId)).data.userId == request.auth.uid &&
+         getAfter(/databases/$(database)/documents/payments/$(incoming().paymentId)).data.referenceNormalized == refKey &&
+         getAfter(/databases/$(database)/documents/payments/$(incoming().paymentId)).data.status == 'pending')
+      );
+      allow update: if isAdmin() && isValidId(refKey) && isValidPaymentReference(incoming()) &&
+                       incoming().referenceNormalized == existing().referenceNormalized &&
+                       incoming().paymentId == existing().paymentId &&
+                       incoming().createdAt == existing().createdAt &&
+                       ('status' in existing()) && existing().status == 'pending' &&
+                       ('status' in incoming()) && incoming().status == 'approved';
+      allow delete: if isAdmin() && isValidId(refKey) &&
+                       ('status' in existing()) && existing().status == 'pending';
     }
 
     match /services/{serviceId} {
@@ -552,7 +580,9 @@ service cloud.firestore {
 
     match /attendance/{attendanceId} {
       allow get: if isSignedIn() && isValidId(attendanceId) && (
-        isAdmin() || isInstructor() || (resource != null && existing().studentUid == request.auth.uid)
+        isAdmin() ||
+        (resource != null && existing().studentUid == request.auth.uid) ||
+        (isInstructor() && (resource == null || existing().instructorUid == request.auth.uid))
       );
       allow list: if isSignedIn() && (
         existing().studentUid == request.auth.uid ||
@@ -560,12 +590,20 @@ service cloud.firestore {
         (isInstructor() && existing().instructorUid == request.auth.uid)
       );
       allow create: if isSignedIn() && isValidId(attendanceId) && isValidAttendance(incoming()) && (
-        isAdmin() || (isInstructor() && incoming().markedByUid == request.auth.uid)
+        isAdmin() ||
+        (isAssignedCourseInstructor(incoming().programmeId) &&
+         incoming().instructorUid == request.auth.uid &&
+         incoming().markedByUid == request.auth.uid)
       );
       allow update: if isSignedIn() && isValidId(attendanceId) && isValidAttendance(incoming()) &&
                        incoming().studentUid == existing().studentUid &&
+                       incoming().programmeId == existing().programmeId &&
+                       incoming().instructorUid == existing().instructorUid &&
                        incoming().createdAt == existing().createdAt && (
-        isAdmin() || isInstructor()
+        isAdmin() ||
+        (isAssignedCourseInstructor(existing().programmeId) &&
+         existing().instructorUid == request.auth.uid &&
+         incoming().markedByUid == request.auth.uid)
       );
       allow delete: if isAdmin() && isValidId(attendanceId);
     }
@@ -573,8 +611,8 @@ service cloud.firestore {
     match /results/{resultId} {
       allow get: if isSignedIn() && isValidId(resultId) && (
         isAdmin() ||
-        isInstructor() ||
-        (resource != null && existing().studentUid == request.auth.uid && existing().published == true)
+        (resource != null && existing().studentUid == request.auth.uid && existing().published == true) ||
+        (isInstructor() && (resource == null || existing().instructorUid == request.auth.uid))
       );
       allow list: if isSignedIn() && (
         (existing().studentUid == request.auth.uid && existing().published == true) ||
@@ -582,12 +620,18 @@ service cloud.firestore {
         (isInstructor() && existing().instructorUid == request.auth.uid)
       );
       allow create: if isSignedIn() && isValidId(resultId) && isValidResult(incoming()) && (
-        isAdmin() || isInstructor()
+        isAdmin() ||
+        (isAssignedCourseInstructor(incoming().programmeId) &&
+         incoming().instructorUid == request.auth.uid)
       );
       allow update: if isSignedIn() && isValidId(resultId) && isValidResult(incoming()) &&
                        incoming().studentUid == existing().studentUid &&
+                       incoming().programmeId == existing().programmeId &&
+                       incoming().instructorUid == existing().instructorUid &&
                        incoming().createdAt == existing().createdAt && (
-        isAdmin() || isInstructor()
+        isAdmin() ||
+        (isAssignedCourseInstructor(existing().programmeId) &&
+         existing().instructorUid == request.auth.uid)
       );
       allow delete: if isAdmin() && isValidId(resultId);
     }
@@ -637,7 +681,9 @@ service cloud.firestore {
         existing().userId == request.auth.uid || isAdmin()
       );
       allow create: if isSignedIn() && isValidId(notificationId) && isValidNotification(incoming()) && (
-        isAdmin() || isInstructor() || incoming().userId == request.auth.uid
+        isAdmin() ||
+        (isInstructor() && incoming().type in ['result', 'attendance']) ||
+        (incoming().userId == request.auth.uid && incoming().type in ['general', 'announcement'])
       );
       allow update: if isSignedIn() && isValidId(notificationId) && isValidNotification(incoming()) &&
                        incoming().userId == existing().userId &&

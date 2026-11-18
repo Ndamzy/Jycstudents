@@ -160,7 +160,7 @@ object AppRoutes {
   const val REPORTS = "reports"
 
   val ADMIN_ONLY_ROUTES =
-    setOf(ADMIN_DASHBOARD, ADMIN_STUDENTS, ADMIN_ROLES, ADMIN_SETTINGS, REPORTS)
+    setOf(ADMIN_DASHBOARD, ADMIN_STUDENTS, ADMIN_ROLES, ADMIN_SETTINGS, REPORTS, REGISTRATION)
 }
 
 private data class NavDestination(
@@ -182,6 +182,7 @@ fun AuthenticatedAppShell(
   val scope = rememberCoroutineScope()
 
   val isAdminVerified by mainVm.isAdminVerified.collectAsStateWithLifecycle()
+  val roleVerificationComplete by mainVm.roleVerificationComplete.collectAsStateWithLifecycle()
   val activeRole by mainVm.activeRole.collectAsStateWithLifecycle()
   val userProfileState by mainVm.userProfileState.collectAsStateWithLifecycle()
   val settings by mainVm.institutionSettings.collectAsStateWithLifecycle()
@@ -257,9 +258,9 @@ fun AuthenticatedAppShell(
     }
   }
 
-  when (val state = userProfileState) {
-    is UiState.Loading -> {
-      Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+  val state = userProfileState
+  if (state is UiState.Loading || (!roleVerificationComplete && state !is UiState.Error)) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
           OfficialJyLogoBadge(size = 96.dp, cornerRadius = 20.dp)
           Spacer(modifier = Modifier.height(16.dp))
@@ -279,7 +280,9 @@ fun AuthenticatedAppShell(
         }
       }
       return
-    }
+  }
+  when (state) {
+    is UiState.Loading -> Unit
     is UiState.Error -> {
       Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
         Card(shape = RoundedCornerShape(20.dp)) {
@@ -1080,51 +1083,55 @@ fun AuthenticatedAppShell(
                     }
 
                   AppRoutes.REGISTRATION ->
-                    StudentRegistrationScreen(
-                      defaultEmail = "",
-                      defaultName = "",
-                      settings = settings,
-                      programmes = programmes,
-                      isBusy = actionBusy,
-                      isAdminAddingStudent = true,
-                      onNotify = { msg -> mainVm.postFeedback(msg) },
-                      onSubmit = {
-                        fullName,
-                        gender,
-                        dob,
-                        phone,
-                        email,
-                        addr,
-                        stateOrigin,
-                        lga,
-                        nok,
-                        nokPhone,
-                        photo,
-                        prog,
-                        level ->
-                        val syntheticUid = "stu_${UUID.randomUUID().toString().replace("-", "").take(12)}"
-                        mainVm.registerStudent(
-                          fullName = fullName,
-                          gender = gender,
-                          dateOfBirth = dob,
-                          phoneNumber = phone,
-                          email = email,
-                          residentialAddress = addr,
-                          stateOfOrigin = stateOrigin,
-                          localGovernmentArea = lga,
-                          nextOfKin = nok,
-                          nextOfKinPhone = nokPhone,
-                          passportPhotoBase64 = photo,
-                          programme = prog,
-                          trainingLevel = level,
-                          targetUid = syntheticUid,
-                          onSuccess = {
-                            currentRoute = if (isAdminVerified) AppRoutes.ADMIN_STUDENTS else homeRoute
-                          },
-                        )
-                      },
-                      onSignOutOrCancel = { currentRoute = homeRoute },
-                    )
+                    if (!isAdminVerified) {
+                      AdminAccessDeniedScreen(onReturnHome = { currentRoute = homeRoute })
+                    } else {
+                      StudentRegistrationScreen(
+                        defaultEmail = "",
+                        defaultName = "",
+                        settings = settings,
+                        programmes = programmes,
+                        isBusy = actionBusy,
+                        isAdminAddingStudent = true,
+                        onNotify = { msg -> mainVm.postFeedback(msg) },
+                        onSubmit = {
+                          fullName,
+                          gender,
+                          dob,
+                          phone,
+                          email,
+                          addr,
+                          stateOrigin,
+                          lga,
+                          nok,
+                          nokPhone,
+                          photo,
+                          prog,
+                          level ->
+                          val syntheticUid = "stu_${UUID.randomUUID().toString().replace("-", "").take(12)}"
+                          mainVm.registerStudent(
+                            fullName = fullName,
+                            gender = gender,
+                            dateOfBirth = dob,
+                            phoneNumber = phone,
+                            email = email,
+                            residentialAddress = addr,
+                            stateOfOrigin = stateOrigin,
+                            localGovernmentArea = lga,
+                            nextOfKin = nok,
+                            nextOfKinPhone = nokPhone,
+                            passportPhotoBase64 = photo,
+                            programme = prog,
+                            trainingLevel = level,
+                            targetUid = syntheticUid,
+                            onSuccess = {
+                              currentRoute = AppRoutes.ADMIN_STUDENTS
+                            },
+                          )
+                        },
+                        onSignOutOrCancel = { currentRoute = homeRoute },
+                      )
+                    }
                 }
               }
             }

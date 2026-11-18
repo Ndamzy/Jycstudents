@@ -45,9 +45,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -94,11 +91,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
@@ -108,7 +100,6 @@ import com.example.data.model.JyCatalogDefaults
 import com.example.data.model.Programme
 import com.example.data.remote.AdminAuthClient
 import com.example.data.remote.AdminAuthResult
-import com.example.data.remote.AdminRecoveryResult
 import com.example.data.remote.GoogleAuthHelper
 import com.example.ui.components.JyBusinessFooter
 import com.example.ui.components.OfficialContactCard
@@ -348,26 +339,6 @@ fun LoginScreen(
   var isLoading by remember { mutableStateOf(false) }
   var errorMsg by remember { mutableStateOf<String?>(null) }
 
-  // Exclusive Owner Administrator form state (never persisted)
-  var adminUsername by remember { mutableStateOf("") }
-  var adminPassword by remember { mutableStateOf("") }
-  var passwordVisible by remember { mutableStateOf(false) }
-  var showRecoveryDialog by remember { mutableStateOf(false) }
-  var recoveryMessage by remember { mutableStateOf<String?>(null) }
-
-  if (showRecoveryDialog) {
-    AdminOwnerRecoveryDialog(
-      initialUsername = adminUsername,
-      onDismiss = { showRecoveryDialog = false },
-      onRecovered = { msg ->
-        showRecoveryDialog = false
-        adminPassword = ""
-        errorMsg = null
-        recoveryMessage = msg
-      },
-    )
-  }
-
   Scaffold(
     topBar = {
       TopAppBar(
@@ -393,14 +364,14 @@ fun LoginScreen(
         OfficialJyLogoBadge(size = 104.dp, cornerRadius = 20.dp)
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-          if (selectedPortalTab == 1) "Administrator Login" else "Student Sign In",
+          if (selectedPortalTab == 1) "Owner Administrator Login" else "Student Sign In",
           style = MaterialTheme.typography.headlineMedium,
           fontWeight = FontWeight.Bold,
         )
         Spacer(modifier = Modifier.height(6.dp))
         Text(
           if (selectedPortalTab == 1) {
-            "Exclusive JY-COMPUTERS owner portal protected by server-verified credentials."
+            "Exclusive JY-COMPUTERS owner sign-in restricted to ${JyCatalogDefaults.OWNER_ADMIN_EMAIL} with Firebase custom claims."
           } else {
             "Sign in with your Google account to access the Student Portal, courses, payments, and services."
           },
@@ -417,7 +388,6 @@ fun LoginScreen(
             onClick = {
               selectedPortalTab = 0
               errorMsg = null
-              recoveryMessage = null
             },
             text = { Text("Student Login") },
             icon = { Icon(Icons.Filled.School, contentDescription = null) },
@@ -512,102 +482,58 @@ fun LoginScreen(
               }
             } else {
               Text(
-                "Google Sign-In is disabled for administrators. Enter the exclusive owner username and password.",
+                "Only the verified owner Google account (${JyCatalogDefaults.OWNER_ADMIN_EMAIL}) with server-assigned Firebase custom claims can enter the Administrator Dashboard. Student, instructor, and any other Google accounts are rejected.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
               )
-              Spacer(modifier = Modifier.height(16.dp))
-
-              val submitAdminLogin: () -> Unit = {
-                errorMsg = null
-                recoveryMessage = null
-                if (adminUsername.isBlank() || adminPassword.isBlank()) {
-                  errorMsg = "Enter both administrator username and password."
-                } else {
-                  isLoading = true
-                  scope.launch {
-                    when (val result = AdminAuthClient.login(adminUsername, adminPassword)) {
-                      is AdminAuthResult.Success -> {
-                        adminPassword = ""
-                        isLoading = false
-                        onAuthSuccess()
-                      }
-                      is AdminAuthResult.LockedOut -> {
-                        isLoading = false
-                        errorMsg = result.message
-                      }
-                      is AdminAuthResult.Failed -> {
-                        isLoading = false
-                        errorMsg = result.message
-                      }
-                    }
-                  }
-                }
-              }
-
-              OutlinedTextField(
-                value = adminUsername,
-                onValueChange = {
-                  adminUsername = it
-                  errorMsg = null
-                },
-                label = { Text("Username") },
-                singleLine = true,
-                enabled = !isLoading,
-                keyboardOptions =
-                  KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None,
-                    autoCorrectEnabled = false,
-                    keyboardType = KeyboardType.Text,
-                    imeAction = ImeAction.Next,
-                  ),
-                modifier = Modifier.fillMaxWidth().testTag("admin_username_input"),
-              )
-
-              Spacer(modifier = Modifier.height(12.dp))
-
-              OutlinedTextField(
-                value = adminPassword,
-                onValueChange = {
-                  adminPassword = it
-                  errorMsg = null
-                },
-                label = { Text("Password") },
-                singleLine = true,
-                enabled = !isLoading,
-                keyboardOptions =
-                  KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None,
-                    autoCorrectEnabled = false,
-                    keyboardType = KeyboardType.Password,
-                    imeAction = ImeAction.Done,
-                  ),
-                keyboardActions = KeyboardActions(onDone = { if (!isLoading) submitAdminLogin() }),
-                visualTransformation =
-                  if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = {
-                  IconButton(
-                    onClick = { passwordVisible = !passwordVisible },
-                    modifier = Modifier.testTag("admin_toggle_password_visibility"),
-                  ) {
-                    Icon(
-                      imageVector =
-                        if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                      contentDescription = if (passwordVisible) "Hide password" else "Show password",
-                    )
-                  }
-                },
-                modifier = Modifier.fillMaxWidth().testTag("admin_password_input"),
-              )
-
               Spacer(modifier = Modifier.height(18.dp))
 
               Button(
-                onClick = submitAdminLogin,
+                onClick = {
+                  errorMsg = null
+                  isLoading = true
+                  AdminAuthClient.setLoginInProgress(true)
+                  GoogleAuthHelper.onGoogleSignInClicked(
+                    context = context,
+                    credentialManager = credentialManager,
+                    scope = scope,
+                    onAuthSuccess = {
+                      scope.launch {
+                        when (val result = AdminAuthClient.verifyOwnerGoogleSignIn()) {
+                          is AdminAuthResult.Success -> {
+                            isLoading = false
+                            onAuthSuccess()
+                          }
+                          is AdminAuthResult.LockedOut -> {
+                            GoogleAuthHelper.signOut(credentialManager = credentialManager, scope = scope)
+                            isLoading = false
+                            errorMsg = result.message
+                          }
+                          is AdminAuthResult.Failed -> {
+                            GoogleAuthHelper.signOut(credentialManager = credentialManager, scope = scope)
+                            isLoading = false
+                            errorMsg = result.message
+                          }
+                        }
+                      }
+                    },
+                    onAuthError = { msg ->
+                      AdminAuthClient.setLoginInProgress(false)
+                      isLoading = false
+                      errorMsg = msg
+                    },
+                    onAuthCancelled = {
+                      AdminAuthClient.setLoginInProgress(false)
+                      isLoading = false
+                      errorMsg =
+                        "Administrator Google Sign-In was cancelled. Select ${JyCatalogDefaults.OWNER_ADMIN_EMAIL} to continue."
+                    },
+                  )
+                },
                 enabled = !isLoading,
                 modifier =
-                  Modifier.fillMaxWidth().height(54.dp).testTag("admin_login_submit_button"),
+                  Modifier.fillMaxWidth().height(54.dp).testTag("admin_google_sign_in_button"),
                 shape = RoundedCornerShape(14.dp),
               ) {
                 if (isLoading) {
@@ -617,38 +543,15 @@ fun LoginScreen(
                     strokeWidth = 2.dp,
                   )
                   Spacer(modifier = Modifier.width(10.dp))
-                  Text("Verifying Credentials...")
+                  Text("Verifying Owner Claims...")
                 } else {
                   Icon(Icons.Filled.AdminPanelSettings, contentDescription = null)
                   Spacer(modifier = Modifier.width(8.dp))
-                  Text("Secure Administrator Login", style = MaterialTheme.typography.labelLarge)
+                  Text(
+                    "Administrator Sign In with Google (Owner Only)",
+                    style = MaterialTheme.typography.labelLarge,
+                  )
                 }
-              }
-
-              Spacer(modifier = Modifier.height(8.dp))
-
-              TextButton(
-                onClick = { showRecoveryDialog = true },
-                enabled = !isLoading,
-                modifier = Modifier.testTag("admin_forgot_password_button"),
-              ) {
-                Text("Forgot Password / Account Recovery")
-              }
-            }
-
-            if (recoveryMessage != null) {
-              Spacer(modifier = Modifier.height(12.dp))
-              Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth(),
-              ) {
-                Text(
-                  text = recoveryMessage!!,
-                  color = MaterialTheme.colorScheme.onPrimaryContainer,
-                  style = MaterialTheme.typography.bodySmall,
-                  modifier = Modifier.padding(12.dp),
-                )
               }
             }
 
@@ -675,146 +578,11 @@ fun LoginScreen(
           onClick = onOpenRecovery,
           modifier = Modifier.testTag("login_recovery_link"),
         ) {
-          Text("Password & Account Recovery Help")
+          Text("Account & Owner Access Help")
         }
       }
     }
   }
-}
-
-@Composable
-private fun AdminOwnerRecoveryDialog(
-  initialUsername: String,
-  onDismiss: () -> Unit,
-  onRecovered: (String) -> Unit,
-) {
-  val scope = rememberCoroutineScope()
-  var username by remember { mutableStateOf(initialUsername) }
-  var recoveryKey by remember { mutableStateOf("") }
-  var newPassword by remember { mutableStateOf("") }
-  var confirmPassword by remember { mutableStateOf("") }
-  var showSecrets by remember { mutableStateOf(false) }
-  var busy by remember { mutableStateOf(false) }
-  var localError by remember { mutableStateOf<String?>(null) }
-
-  AlertDialog(
-    onDismissRequest = { if (!busy) onDismiss() },
-    title = { Text("Owner Administrator Recovery") },
-    text = {
-      Column(
-        modifier = Modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        Text(
-          "No public email reset link is available for administrator accounts. Enter your administrator username, offline server recovery key, and a new strong password (minimum 12 characters with upper, lower, number, and symbol).",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedTextField(
-          value = username,
-          onValueChange = {
-            username = it
-            localError = null
-          },
-          label = { Text("Administrator Username") },
-          singleLine = true,
-          enabled = !busy,
-          modifier = Modifier.fillMaxWidth().testTag("admin_recovery_username_input"),
-        )
-        OutlinedTextField(
-          value = recoveryKey,
-          onValueChange = {
-            recoveryKey = it
-            localError = null
-          },
-          label = { Text("Owner Recovery Key") },
-          singleLine = true,
-          enabled = !busy,
-          visualTransformation =
-            if (showSecrets) VisualTransformation.None else PasswordVisualTransformation(),
-          trailingIcon = {
-            IconButton(onClick = { showSecrets = !showSecrets }) {
-              Icon(
-                if (showSecrets) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                contentDescription = if (showSecrets) "Hide recovery secret" else "Show recovery secret",
-              )
-            }
-          },
-          modifier = Modifier.fillMaxWidth().testTag("admin_recovery_key_input"),
-        )
-        OutlinedTextField(
-          value = newPassword,
-          onValueChange = {
-            newPassword = it
-            localError = null
-          },
-          label = { Text("New Strong Password") },
-          singleLine = true,
-          enabled = !busy,
-          visualTransformation =
-            if (showSecrets) VisualTransformation.None else PasswordVisualTransformation(),
-          modifier = Modifier.fillMaxWidth().testTag("admin_recovery_new_password_input"),
-        )
-        OutlinedTextField(
-          value = confirmPassword,
-          onValueChange = {
-            confirmPassword = it
-            localError = null
-          },
-          label = { Text("Confirm New Password") },
-          singleLine = true,
-          enabled = !busy,
-          visualTransformation =
-            if (showSecrets) VisualTransformation.None else PasswordVisualTransformation(),
-          modifier = Modifier.fillMaxWidth().testTag("admin_recovery_confirm_password_input"),
-        )
-        if (localError != null) {
-          Text(
-            text = localError!!,
-            color = MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.bodySmall,
-          )
-        }
-      }
-    },
-    confirmButton = {
-      Button(
-        onClick = {
-          when {
-            username.isBlank() || recoveryKey.isBlank() ->
-              localError = "Enter administrator username and recovery key."
-            newPassword.length < 12 ->
-              localError = "New password must be at least 12 characters."
-            newPassword != confirmPassword ->
-              localError = "New passwords do not match."
-            else -> {
-              localError = null
-              busy = true
-              scope.launch {
-                when (val res = AdminAuthClient.recoverPassword(username, recoveryKey, newPassword)) {
-                  is AdminRecoveryResult.Success -> {
-                    busy = false
-                    onRecovered(res.message)
-                  }
-                  is AdminRecoveryResult.Failed -> {
-                    busy = false
-                    localError = res.message
-                  }
-                }
-              }
-            }
-          }
-        },
-        enabled = !busy,
-        modifier = Modifier.testTag("admin_recovery_submit_button"),
-      ) {
-        Text(if (busy) "Resetting..." else "Reset Password")
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }
-    },
-  )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -899,13 +667,13 @@ fun AccountRecoveryScreen(onBack: () -> Unit) {
         ) {
           Column(modifier = Modifier.padding(20.dp)) {
             Text(
-              "Owner Administrator Recovery",
+              "Owner Administrator Access",
               style = MaterialTheme.typography.titleMedium,
               fontWeight = FontWeight.Bold,
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-              "Public email reset links are disabled for the single-administrator account. Return to Login → Administrator Login → Forgot Password / Account Recovery and provide the offline server-provisioned recovery key.",
+              "Administrator privileges are restricted exclusively to the owner Google account (${JyCatalogDefaults.OWNER_ADMIN_EMAIL}) with server-assigned Firebase custom claims (`jySingleAdmin: true`, `role: \"admin\"`). If you lose access to your Google account, use Google Account Recovery above; if claims are missing after sign-in, run the server-side Admin SDK script (`admin-auth-server/provision-firebase-admin.js`).",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
